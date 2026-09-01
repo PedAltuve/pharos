@@ -1,0 +1,11 @@
+# Local Pi runtime state
+.atl/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local CodeGraph index (recommended)
+.codegraph/
