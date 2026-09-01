@@ -1,0 +1,66 @@
+change: project-foundation
+project: pharos
+created: 2026-09-01
+artifact_store: hybrid
+execution_mode: auto
+delivery_strategy: ask-on-risk
+review_budget_lines: 400
+
+phases:
+  explore:
+    status: done
+    artifacts:
+      openspec: openspec/changes/project-foundation/exploration.md
+      engram: sdd/project-foundation/explore (observation 2008)
+    note: >
+      Executed by sdd-explore (read-only agent); openspec copy written by the
+      orchestrator from the Engram artifact.
+  research:
+    status: skipped
+    note: Offered after explore; user declined (2026-09-01). Exploration already verified the key external facts.
+  proposal:
+    status: done
+    artifacts:
+      openspec: openspec/changes/project-foundation/proposal.md
+      engram: sdd/project-foundation/proposal (observation 2009)
+  spec:
+    status: done
+    artifacts:
+      openspec: openspec/changes/project-foundation/specs/project-toolchain/spec.md
+      engram: sdd/project-foundation/spec (observation 2011)
+  design:
+    status: done
+    gate: fresh-context validator PASS (2026-09-01)
+    artifacts:
+      openspec: openspec/changes/project-foundation/design.md
+      engram: sdd/project-foundation/design (observation 2012)
+    orchestrator_rulings:
+      - "cli -> adapters edge RATIFIED: technical-design-v1.md section 2 places the composition root inside cli/; the narrower matrix in the design-phase brief was the orchestrator's error."
+  tasks:
+    status: done
+    artifacts:
+      openspec: openspec/changes/project-foundation/tasks.md
+      engram: sdd/project-foundation/tasks (observation 2015)
+    review_workload_forecast: "~298 authored lines, 16 files, risk Low, single PR, no pre-apply decision needed"
+  apply:
+    status: done
+    gate: fresh-context validator PASS with empirical re-run (2026-09-02)
+    artifacts:
+      openspec: openspec/changes/project-foundation/tasks.md (17/17 checked)
+      engram: sdd/project-foundation/apply-progress
+    attempt_ledger:
+      outcome: passed (attempt 1, evidence sha256:460481bc...)
+      note: >
+        Ledger counted 3379 changed lines (289 authored + generated package-lock.json)
+        against the 400 acquire budget; maintainer-approved objective reset recorded
+        2026-09-02 (actor Pedro Altuve). Future acquires must size max-changed-lines
+        for total lines including generated lockfiles.
+  verify:
+    status: done
+    verdict: PASS WITH WARNINGS (0 critical, 2 non-blocking warnings, 2 suggestions)
+    artifacts:
+      openspec: openspec/changes/project-foundation/verify-report.md
+      engram: sdd/project-foundation/verify-report (observation 2023)
+    attempt_ledger: verify objective settled passed and complete (2026-09-02)
+  archive:
+    status: pending

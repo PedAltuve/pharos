@@ -1,0 +1,52 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Project: pharos (bootstrapped — package.json, hexagonal src/ skeleton, boundary-enforced toolchain)
+  Stack (approved design, installed): Node.js >= 20 LTS, TypeScript strict ESM
+  Architecture: hexagonal (src/domain pure, src/application, src/adapters, src/cli)
+  Key deps (planned): Commander + @clack/prompts, Playwright/Chromium, JSON Schema 2020-12 + Ajv,
+  RFC 8785 JCS canonicalization + SHA-256
+  Testing: Vitest + @vitest/coverage-v8 (v8 provider), test command `npm test`
+
+strict_tdd: true
+strict_tdd_note: >
+  The `project-foundation` change landed the workspace test command (`npm test` via Vitest) and
+  the hexagonal boundary lint enforcement (eslint-plugin-boundaries) that proves it. Per
+  sdd-init decision gates, strict_tdd re-enables now that a real workspace-level test command
+  exists and the user-level strict TDD preference (true) is no longer blocked.
+
+projects:
+  - name: pharos
+    path: "."
+    language: typescript
+    test_command: "npm test"
+    build_command: "npm run build"
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - First change must include selecting and bootstrapping the test runner (test_command) since none exists yet
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Respect the approved technical-design-v1.md stack; do not introduce alternatives without justification
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Task 1 of the first change establishes package.json, tsconfig (strict ESM), and the test runner
+  apply:
+    guidelines:
+      - Follow hexagonal architecture boundaries (src/domain pure, src/application, src/adapters, src/cli)
+      - Follow existing code patterns once established
+    tdd: true
+    test_command: "npm test"
+  verify:
+    test_command: "npm test"
+    build_command: "npm run build"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
