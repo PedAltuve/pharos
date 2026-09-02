@@ -12,6 +12,12 @@ export interface CreateDraftCommand {
   readonly origin: DraftOrigin;
 }
 
+export interface UpdateDraftCommand {
+  readonly draftId: string;
+  readonly expectedRevision: number;
+  readonly content: SemanticSource;
+}
+
 export function createDraft(
   beacon: Beacon,
   cmd: CreateDraftCommand,
@@ -32,5 +38,37 @@ export function createDraft(
   return ok({
     ...beacon,
     drafts: { ...beacon.drafts, [cmd.draftId]: draft },
+  });
+}
+
+export function updateDraft(
+  beacon: Beacon,
+  cmd: UpdateDraftCommand,
+): Result<Beacon, BeaconRefusal> {
+  const draft = getOwn(beacon.drafts, cmd.draftId);
+  if (draft === undefined) {
+    return err({ rule: "draft-not-found", draftId: cmd.draftId });
+  }
+  if (draft.status !== "open") {
+    return err({ rule: "draft-not-open", draftId: cmd.draftId, status: draft.status });
+  }
+  if (cmd.expectedRevision !== draft.revision) {
+    return err({
+      rule: "stale-draft-revision",
+      draftId: cmd.draftId,
+      expectedRevision: cmd.expectedRevision,
+      currentRevision: draft.revision,
+    });
+  }
+
+  const updated: Draft = {
+    ...draft,
+    revision: draft.revision + 1,
+    content: cmd.content,
+  };
+
+  return ok({
+    ...beacon,
+    drafts: { ...beacon.drafts, [cmd.draftId]: updated },
   });
 }
