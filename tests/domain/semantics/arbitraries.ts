@@ -75,16 +75,18 @@ export const arbBaseSource: fc.Arbitrary<SemanticSource> = fc
     readinessIntent: { sideEffectClass: "stateful" as const },
   }));
 
-/** Overrides `variables` on an existing source, keeping every other field fixed. */
+/**
+ * Overrides `variables` on an existing source with the given array,
+ * keeping every other field fixed. Deliberately array form (not
+ * pre-keyed) so `normalize()`'s own `toKeyed` performs the keying —
+ * otherwise a keyed-order-insensitivity property test would never
+ * exercise the array-to-Record conversion it is meant to cover.
+ */
 export function withVariables(
   source: SemanticSource,
   variables: readonly SourceVariable[],
 ): SemanticSource {
-  const record: Record<string, SourceVariable> = {};
-  for (const variable of variables) {
-    record[variable.name] = variable;
-  }
-  return { ...source, variables: record };
+  return { ...source, variables };
 }
 
 /**
@@ -318,11 +320,28 @@ export const PATH_ACCESSORS: Readonly<
       const isolation = source.readinessIntent.isolation ?? {
         strategy: "reset-fixture",
       };
+      // `value` is either the raw array/null/undefined shape addressed by
+      // the source, or (from FIELD_DECLARATIONS[path].declaredDefault) the
+      // already-keyed `SemanticKeySet` shape ({}); accept all four so the
+      // same accessor exercises "write raw" (property 3) and "write
+      // omitted vs. the declared default" (property 2) uniformly. null and
+      // undefined are kept distinct — resolveDeclared treats them
+      // differently.
+      let scope: readonly string[] | null | undefined;
+      if (Array.isArray(value)) {
+        scope = value as readonly string[];
+      } else if (value === null) {
+        scope = null;
+      } else if (value === undefined) {
+        scope = undefined;
+      } else {
+        scope = Object.keys(value as Readonly<Record<string, unknown>>);
+      }
       return {
         ...source,
         readinessIntent: {
           ...source.readinessIntent,
-          isolation: { ...isolation, scope: value as readonly string[] | null },
+          isolation: { ...isolation, scope },
         },
       };
     },
