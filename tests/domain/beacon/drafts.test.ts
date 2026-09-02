@@ -1,9 +1,18 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { createDraft, updateDraft } from "../../../src/domain/beacon/index.js";
+import { abandonDraft, createDraft, forkDraft, updateDraft } from "../../../src/domain/beacon/index.js";
 import type { Beacon, Draft, DraftOrigin } from "../../../src/domain/beacon/index.js";
+import type { Hasher } from "../../../src/domain/ports/index.js";
+import { project } from "../../../src/domain/semantics/index.js";
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 import { arbBeaconAndCreateDraftCommand, arbPrototypeKey } from "./arbitraries.js";
+
+/** Deterministic test-only Hasher: JSON.stringify of the projection, so
+ * different content always yields a different "hash" and the same content
+ * always yields the same one, without depending on adapter behavior. */
+const stubHasher: Hasher = {
+  hash: (value) => JSON.stringify(value),
+};
 
 function baseContent(): SemanticSource {
   return {
@@ -61,6 +70,20 @@ function withClosedDraft(beacon: Beacon, draftId: string): Beacon {
     content: baseContent(),
     approvedVersionId: "ver_1",
     closedAt: "2026-01-01T00:00:00.000Z",
+  };
+  return { ...beacon, drafts: { ...beacon.drafts, [draftId]: draft } };
+}
+
+function withAbandonedDraft(beacon: Beacon, draftId: string): Beacon {
+  const draft: Draft = {
+    status: "abandoned",
+    draftId,
+    label: "A draft",
+    origin: baseOrigin(),
+    finalRevision: 3,
+    finalHash: stubHasher.hash(project(baseContent())),
+    reason: "No longer needed",
+    abandonedAt: "2026-01-01T00:00:00.000Z",
   };
   return { ...beacon, drafts: { ...beacon.drafts, [draftId]: draft } };
 }
@@ -287,6 +310,220 @@ describe("updateDraft", () => {
           } else {
             expect(result.ok).toBe(false);
             expect(beacon).toEqual(before);
+          }
+        },
+      ),
+    );
+  });
+});
+
+describe("forkDraft", () => {
+  it("forks a new open draft at revision 1 from an open source, preserving origin lineage", () => {
+    const beacon = withOpenDraft(baseBeacon(), "drf_1", 2);
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "drf_1",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.drafts["drf_2"]).toEqual({
+      status: "open",
+      draftId: "drf_2",
+      label: "Forked draft",
+      revision: 1,
+      origin: { ...baseOrigin(), forkedFromDraft: "drf_1" },
+      content: baseContent(),
+    });
+    expect(result.value.drafts["drf_1"]).toEqual(beacon.drafts["drf_1"]);
+  });
+
+  it("forks from a closed source", () => {
+    const beacon = withClosedDraft(baseBeacon(), "drf_1");
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "drf_1",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.drafts["drf_2"]?.status).toBe("open");
+  });
+
+  it("refuses when the source draft does not exist", () => {
+    const beacon = baseBeacon();
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "drf_missing",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-found", draftId: "drf_missing" },
+    });
+  });
+
+  it("refuses when the new draft id collides", () => {
+    const beacon = withOpenDraft(withOpenDraft(baseBeacon(), "drf_1", 1), "drf_2", 1);
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "drf_1",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "duplicate-draft-id", draftId: "drf_2" },
+    });
+  });
+
+  it("refuses forking an abandoned source with source-draft-has-no-content, not draft-not-open", () => {
+    const beacon = withAbandonedDraft(baseBeacon(), "drf_1");
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "drf_1",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "source-draft-has-no-content", draftId: "drf_1", status: "abandoned" },
+    });
+  });
+
+  it("refuses draft-not-found for a prototype-shadowing sourceDraftId with no own entry, without fabricating a source", () => {
+    const beacon = baseBeacon();
+
+    const result = forkDraft(beacon, {
+      sourceDraftId: "toString",
+      draftId: "drf_2",
+      label: "Forked draft",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-found", draftId: "toString" },
+    });
+  });
+});
+
+describe("abandonDraft", () => {
+  it("discards content but keeps lineage and records finalHash when abandoning an open draft", () => {
+    const beacon = withOpenDraft(baseBeacon(), "drf_1", 3);
+    const expectedHash = stubHasher.hash(project(baseContent()));
+
+    const result = abandonDraft(
+      beacon,
+      {
+        draftId: "drf_1",
+        reason: "No longer needed",
+        abandonedAt: "2026-01-01T00:00:00.000Z",
+      },
+      stubHasher,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const abandoned = result.value.drafts["drf_1"];
+    expect(abandoned).toEqual({
+      status: "abandoned",
+      draftId: "drf_1",
+      label: "A draft",
+      origin: baseOrigin(),
+      finalRevision: 3,
+      finalHash: expectedHash,
+      reason: "No longer needed",
+      abandonedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(abandoned).not.toHaveProperty("content");
+  });
+
+  it("refuses double abandonment", () => {
+    const beacon = withAbandonedDraft(baseBeacon(), "drf_1");
+
+    const result = abandonDraft(
+      beacon,
+      {
+        draftId: "drf_1",
+        reason: "Again",
+        abandonedAt: "2026-01-01T00:00:00.000Z",
+      },
+      stubHasher,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-open", draftId: "drf_1", status: "abandoned" },
+    });
+  });
+
+  it("refuses when the draft does not exist", () => {
+    const beacon = baseBeacon();
+
+    const result = abandonDraft(
+      beacon,
+      {
+        draftId: "drf_missing",
+        reason: "No longer needed",
+        abandonedAt: "2026-01-01T00:00:00.000Z",
+      },
+      stubHasher,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-found", draftId: "drf_missing" },
+    });
+  });
+});
+
+describe("property 3 (C1 scope): draft work preserves activeVersionId", () => {
+  it("createDraft, updateDraft, forkDraft, and abandonDraft never change activeVersionId", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<string | null>(null, "ver_1"),
+        (activeVersionId) => {
+          const beacon: Beacon = { ...withOpenDraft(baseBeacon(), "drf_1", 1), activeVersionId };
+
+          const createResult = createDraft(beacon, {
+            draftId: "drf_new",
+            label: "New",
+            content: baseContent(),
+            origin: baseOrigin(),
+          });
+          const updateResult = updateDraft(beacon, {
+            draftId: "drf_1",
+            expectedRevision: 1,
+            content: baseContent(),
+          });
+          const forkResult = forkDraft(beacon, {
+            sourceDraftId: "drf_1",
+            draftId: "drf_fork",
+            label: "Fork",
+          });
+          const abandonResult = abandonDraft(
+            beacon,
+            {
+              draftId: "drf_1",
+              reason: "done",
+              abandonedAt: "2026-01-01T00:00:00.000Z",
+            },
+            stubHasher,
+          );
+
+          for (const result of [createResult, updateResult, forkResult, abandonResult]) {
+            expect(result.ok).toBe(true);
+            if (result.ok) {
+              expect(result.value.activeVersionId).toBe(activeVersionId);
+            }
           }
         },
       ),
