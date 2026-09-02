@@ -21,8 +21,27 @@ export interface StaleDraftRevision {
   readonly currentRevision: number;
 }
 
+export interface SourceDraftHasNoContent {
+  readonly rule: "source-draft-has-no-content";
+  readonly draftId: string;
+  readonly status: string;
+}
+
+export interface VersionNotFound {
+  readonly rule: "version-not-found";
+  readonly versionId: string;
+}
+
+export interface VersionAlreadyRevoked {
+  readonly rule: "version-already-revoked";
+  readonly versionId: string;
+}
+
 export type BeaconRefusal =
   | DuplicateDraftId
   | DraftNotFound
   | DraftNotOpen
-  | StaleDraftRevision;
+  | StaleDraftRevision
+  | SourceDraftHasNoContent
+  | VersionNotFound
+  | VersionAlreadyRevoked;

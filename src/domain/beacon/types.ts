@@ -1,11 +1,11 @@
 import type { SemanticSource } from "../semantics/index.js";
+import type { Version } from "./versions.js";
 
-// C1 keeps `activeVersionId` as an opaque pointer; `versions` arrives with
-// C2 (ADR 7) as a one-line addition, not a placeholder invented here.
 export interface Beacon {
   readonly beaconId: string;
   readonly title: string;
   readonly drafts: Readonly<Record<string, Draft>>;
+  readonly versions: Readonly<Record<string, Version>>;
   readonly activeVersionId: string | null;
 }
 
@@ -40,6 +40,7 @@ export type Draft =
       readonly label: string;
       readonly origin: DraftOrigin;
       readonly finalRevision: number;
+      readonly finalHash: string;
       readonly reason: string;
       readonly abandonedAt: string;
     };
