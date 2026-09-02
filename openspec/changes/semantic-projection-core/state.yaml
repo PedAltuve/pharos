@@ -1,0 +1,83 @@
+change: semantic-projection-core
+project: pharos
+created: 2026-09-02
+artifact_store: hybrid (authoritative openspec per native dispatcher)
+execution_mode: auto
+delivery_strategy: ask-on-risk
+review_budget_lines: 400
+strict_tdd: true
+
+relations:
+  successor: semantic-projection-hashing (Slice B, depends on this change's type model)
+  shared_exploration: sdd/semantic-projection/explore (Engram observation 2040)
+
+operator_decisions:
+  - "Split into two changes (core + hashing) ratified by user 2026-09-02"
+  - "Research offered and declined 2026-09-02"
+  - "Delivery: 3 chained PRs (A1 -> A2 -> A3), chain strategy stacked-to-main, ratified at the review workload guard 2026-09-02"
+
+orchestrator_rulings:
+  - "Migration equivalence = deep structural equality of projections (lifecycle spec section 5 literal wording); sha256 fingerprint stays a port-derived approval artifact"
+  - "Checkpoints keyed by default, ordered only when explicitly declared ordered (lifecycle spec section 4)"
+  - "src/adapters/hashing/ approved as new adapter dir; technical-design section 2 amended in Slice B with MODIFIED toolchain spec delta"
+
+phases:
+  explore:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/exploration.md
+      engram: sdd/semantic-projection/explore (observation 2040)
+    note: Read-only explorer persisted to Engram; orchestrator wrote the openspec mirror.
+  research:
+    status: skipped
+    note: Offered after explore; user declined (2026-09-02).
+  proposal:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/proposal.md
+      engram: sdd/semantic-projection-core/proposal (observation 2042)
+  spec:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/specs/semantic-projection/spec.md
+      engram: sdd/semantic-projection-core/spec (observation 2043)
+    counts: 6 requirements, 11 scenarios (count corrected at verify; file is source of truth)
+  design:
+    status: done
+    gate: fresh-context validator PASS, all hallucination checks verified vs source docs (2026-09-02)
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/design.md
+      engram: sdd/semantic-projection-core/design (observation 2045)
+    budget_note: >
+      Design refined the authored-line estimate UP to ~775 vs the 400 budget
+      (exploration missed arbitraries module, property-suite file, SemanticSource
+      input types). Proposes 3-way chained split A1 ~223 / A2 ~301 / A3 ~250.
+      Operator ask-on-risk decision due after the tasks forecast.
+  tasks:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/tasks.md
+      engram: sdd/semantic-projection-core/tasks
+    review_workload_forecast: "~775 authored lines (343 prod + 430 tests), risk High ~1.9x budget, chained PRs recommended A1 ~223 -> A2 ~301 -> A3 ~250, decision needed before apply: YES"
+  apply:
+    status: done
+    gate: fresh-context validator PASS with empirical re-run (2026-09-02); note 32 checkboxes (not 30) and 11 spec scenarios (not 12) — cosmetic count discrepancies only
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/tasks.md (32/32 checked; apply misreported 30)
+      engram: sdd/semantic-projection-core/apply-progress (observation 2050)
+    branches:
+      a1: change/semantic-projection-core-a1 (6518796)
+      a2: change/semantic-projection-core-a2 (7bdb003)
+      a3: change/semantic-projection-core-a3 (9078ec2, 25614de)
+    attempt_ledger:
+      outcome: passed; ledger 2417 total lines vs 1200 declared; maintainer reset approved 2026-09-02 (actor Pedro Altuve)
+    real_line_counts: "A1 360 / A2 852 / A3 431 authored (~2.1x forecast, no scope creep); delivery re-ratified as 3 chained PRs with size:exception note on A2"
+  verify:
+    status: done
+    verdict: PASS (11/11 scenarios COMPLIANT, 0 critical, 3 non-blocking warnings)
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/verify-report.md
+      engram: sdd/semantic-projection-core/verify-report (observation 2053)
+    attempt_ledger: verify objective settled passed and complete (2026-09-02)
+  archive:
+    status: pending
