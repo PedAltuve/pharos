@@ -109,3 +109,16 @@ Main specs now reflect all ratified behavior from Beacon Core:
 **Folder move to archive**: Pending-delivery — operator will move `openspec/changes/beacon-core/` to `openspec/changes/archive/2026-09-02-beacon-core/` as part of the final delivery chore commit, mirroring Slice A archive workflow.
 
 **All SDD gates passed. Ready for operator delivery.**
+
+## Post-Review Remediation Addendum (2026-09-02)
+
+The figures above describe the pre-review state and are superseded by this addendum and `verify-report.md`.
+
+An operator review after the first delivery confirmed 3 code blockers (stale-origin null-direction bypass, prototype-key record corruption, unverified version identity in `resolveActiveVersion`) and ratified 4 corrections, including `finalHash` in abandonment tombstones per the lifecycle doc. Specs were amended (now 14 requirements / 25 scenarios), the design gained ADR rows 11-13 (plain-inequality gate, domain-wide `getOwn` own-property lookups, identity-throw scoping), and the fixes were woven into the original commits by a bottom-up rebase.
+
+Final state:
+
+- Stack: master `582fc1f` → c1a `bf058ff` (356) → c1b `8753c38` (230) → c1c `ac48d48` (327) → c2a1 `5b8a495` (258, new branch — PR split) → c2a `7893900` (286) → c2b `d389973`+`f7cadf4` (611, operator-re-ratified size:exception) → c2c `312696b` (222) + docs commits `f266ca7`, `4ba3bd4`.
+- Verification: PASS — 14/14 requirements, 25/25 scenarios, 128/128 tests, 0 CRITICAL; every original blocker re-reproduced and confirmed fixed in isolation.
+- Delivery: 7 chained PRs stacked to master (C2a split into two); OpenSpec artifacts committed in-stack at `f266ca7`.
+- Tasks: 108 total (61 original + 47 remediation), all complete except the force-push tasks executed by the orchestrator at delivery.
