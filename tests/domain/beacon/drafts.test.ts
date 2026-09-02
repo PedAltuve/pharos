@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { abandonDraft, createDraft, forkDraft, updateDraft } from "../../../src/domain/beacon/index.js";
-import type { Beacon, Draft, DraftOrigin } from "../../../src/domain/beacon/index.js";
+import type { Beacon, Draft, DraftOrigin, Version } from "../../../src/domain/beacon/index.js";
 import type { Hasher } from "../../../src/domain/ports/index.js";
 import { project } from "../../../src/domain/semantics/index.js";
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
@@ -37,6 +37,7 @@ function baseBeacon(): Beacon {
     beaconId: "bcn_1",
     title: "Renew an active policy",
     drafts: {},
+    versions: {},
     activeVersionId: null,
   };
 }
@@ -72,6 +73,27 @@ function withClosedDraft(beacon: Beacon, draftId: string): Beacon {
     closedAt: "2026-01-01T00:00:00.000Z",
   };
   return { ...beacon, drafts: { ...beacon.drafts, [draftId]: draft } };
+}
+
+function sampleActiveVersion(versionId: string): Version {
+  return {
+    status: "active",
+    versionId,
+    localNumber: 1,
+    approval: {
+      approvedAt: "2026-01-01T00:00:00.000Z",
+      reviewedHash: "sha256:abc",
+      staleOriginAcknowledged: false,
+      assurance: "operator_confirmed",
+      actor: "operator_1",
+    },
+    provenance: {
+      approvedDraftId: "drf_0",
+      approvedRevision: 1,
+      branchedFromVersion: null,
+      branchedFromHash: null,
+    },
+  };
 }
 
 function withAbandonedDraft(beacon: Beacon, draftId: string): Beacon {
@@ -485,13 +507,17 @@ describe("abandonDraft", () => {
   });
 });
 
-describe("property 3 (C1 scope): draft work preserves activeVersionId", () => {
-  it("createDraft, updateDraft, forkDraft, and abandonDraft never change activeVersionId", () => {
+describe("property 3: draft work preserves activeVersionId and versions", () => {
+  it("createDraft, updateDraft, forkDraft, and abandonDraft never change activeVersionId or versions", () => {
     fc.assert(
       fc.property(
         fc.constantFrom<string | null>(null, "ver_1"),
         (activeVersionId) => {
-          const beacon: Beacon = { ...withOpenDraft(baseBeacon(), "drf_1", 1), activeVersionId };
+          const beacon: Beacon = {
+            ...withOpenDraft(baseBeacon(), "drf_1", 1),
+            activeVersionId,
+            versions: activeVersionId === null ? {} : { ver_1: sampleActiveVersion("ver_1") },
+          };
 
           const createResult = createDraft(beacon, {
             draftId: "drf_new",
@@ -523,6 +549,7 @@ describe("property 3 (C1 scope): draft work preserves activeVersionId", () => {
             expect(result.ok).toBe(true);
             if (result.ok) {
               expect(result.value.activeVersionId).toBe(activeVersionId);
+              expect(result.value.versions).toEqual(beacon.versions);
             }
           }
         },
