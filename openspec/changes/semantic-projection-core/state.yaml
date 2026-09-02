@@ -41,7 +41,7 @@ phases:
     artifacts:
       openspec: openspec/changes/semantic-projection-core/specs/semantic-projection/spec.md
       engram: sdd/semantic-projection-core/spec (observation 2043)
-    counts: 6 requirements, 12 scenarios
+    counts: 6 requirements, 11 scenarios (count corrected at verify; file is source of truth)
   design:
     status: done
     gate: fresh-context validator PASS, all hallucination checks verified vs source docs (2026-09-02)
@@ -60,8 +60,24 @@ phases:
       engram: sdd/semantic-projection-core/tasks
     review_workload_forecast: "~775 authored lines (343 prod + 430 tests), risk High ~1.9x budget, chained PRs recommended A1 ~223 -> A2 ~301 -> A3 ~250, decision needed before apply: YES"
   apply:
-    status: pending
+    status: done
+    gate: fresh-context validator PASS with empirical re-run (2026-09-02); note 32 checkboxes (not 30) and 11 spec scenarios (not 12) — cosmetic count discrepancies only
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/tasks.md (32/32 checked; apply misreported 30)
+      engram: sdd/semantic-projection-core/apply-progress (observation 2050)
+    branches:
+      a1: change/semantic-projection-core-a1 (6518796)
+      a2: change/semantic-projection-core-a2 (7bdb003)
+      a3: change/semantic-projection-core-a3 (9078ec2, 25614de)
+    attempt_ledger:
+      outcome: passed; ledger 2417 total lines vs 1200 declared; maintainer reset approved 2026-09-02 (actor Pedro Altuve)
+    real_line_counts: "A1 360 / A2 852 / A3 431 authored (~2.1x forecast, no scope creep); delivery re-ratified as 3 chained PRs with size:exception note on A2"
   verify:
-    status: pending
+    status: done
+    verdict: PASS (11/11 scenarios COMPLIANT, 0 critical, 3 non-blocking warnings)
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/verify-report.md
+      engram: sdd/semantic-projection-core/verify-report (observation 2053)
+    attempt_ledger: verify objective settled passed and complete (2026-09-02)
   archive:
     status: pending
