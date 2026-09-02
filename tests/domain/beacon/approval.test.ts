@@ -335,6 +335,44 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
   });
 });
 
+describe("approveDraft: stale-origin approval with explicit acknowledgment", () => {
+  it("proceeds when staleOriginAcknowledged is true, recording the acknowledgment on the new version", () => {
+    const beacon: Beacon = {
+      ...withOpenDraft(baseBeacon(), "drf_1", baseContent(), {
+        ...baseOrigin(),
+        branchedFromVersion: "ver_old",
+      }),
+      versions: { ver_current: activeVersion("ver_current", 1) },
+      activeVersionId: "ver_current",
+    };
+    const reviewedHash = stubHasher.hash(project(baseContent()));
+
+    const result = approveDraft(
+      beacon,
+      {
+        draftId: "drf_1",
+        versionId: "ver_new",
+        approvedAt: "2026-02-01T00:00:00.000Z",
+        actor: "operator_1",
+        reviewedHash,
+        staleOriginAcknowledged: true,
+      },
+      stubHasher,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const newVersion = result.value.versions["ver_new"];
+    expect(newVersion?.status).toBe("active");
+    expect(newVersion?.approval.staleOriginAcknowledged).toBe(true);
+    expect(newVersion?.approval.reviewedHash).toBe(reviewedHash);
+    expect(newVersion?.provenance.branchedFromVersion).toBe("ver_old");
+    expect(result.value.activeVersionId).toBe("ver_new");
+    expect(result.value.drafts["drf_1"]?.status).toBe("closed");
+  });
+});
+
 describe("approveDraft: first-approval success (no prior active version)", () => {
   it("appends a new active Version at localNumber 1 and closes the draft", () => {
     const beacon = withOpenDraft(baseBeacon(), "drf_1");
