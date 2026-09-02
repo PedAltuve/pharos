@@ -27,9 +27,21 @@ export interface SourceDraftHasNoContent {
   readonly status: string;
 }
 
+export interface VersionNotFound {
+  readonly rule: "version-not-found";
+  readonly versionId: string;
+}
+
+export interface VersionAlreadyRevoked {
+  readonly rule: "version-already-revoked";
+  readonly versionId: string;
+}
+
 export type BeaconRefusal =
   | DuplicateDraftId
   | DraftNotFound
   | DraftNotOpen
   | StaleDraftRevision
-  | SourceDraftHasNoContent;
+  | SourceDraftHasNoContent
+  | VersionNotFound
+  | VersionAlreadyRevoked;

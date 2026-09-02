@@ -85,4 +85,14 @@ describe("resolveActiveVersion", () => {
 
     expect(() => resolveActiveVersion(beacon)).toThrow(Error);
   });
+
+  it("throws when the resolved record's embedded versionId differs from the lookup key", () => {
+    const beacon: Beacon = {
+      ...baseBeacon(),
+      versions: { ver_A: activeVersion("ver_B", 1) },
+      activeVersionId: "ver_A",
+    };
+
+    expect(() => resolveActiveVersion(beacon)).toThrow(Error);
+  });
 });
