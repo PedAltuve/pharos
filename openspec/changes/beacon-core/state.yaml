@@ -1,0 +1,258 @@
+change: beacon-core
+project: pharos
+created: 2026-09-02
+artifact_store: hybrid (authoritative openspec per native dispatcher)
+execution_mode: auto
+delivery_strategy: ask-on-risk
+review_budget_lines: 400
+strict_tdd: true
+
+relations:
+  predecessors:
+    - semantic-projection-core (Slice A, archived; frozen SemanticSource/project())
+    - semantic-projection-hashing (Slice B, archived; Hasher port + JcsSha256Hasher)
+  successor: fs-beacon-store (Slice D, persistence and atomic active-pointer swap)
+  required_base: 582fc1f  # corrected 2026-09-02: a7c494a predated the Slice B merge; the stack builds on post-merge master
+
+operator_decisions:
+  - "No research lane (2026-09-02)"
+  - "C1/C2 split inside ONE change: C1 Beacon + Draft lifecycle, C2 Version + approval + revocation + active-version resolution"
+  - "Defer Clock/IdGenerator ports; ids and timestamps are caller-supplied strings"
+  - "Draft.content is SemanticSource with on-demand projection/hash recomputation; no cached derived state"
+  - "Stale-origin approval is a boolean gate plus explicit acknowledgment in domain; rich impact comparison deferred to a future CLI/application slice"
+  - "Generic Result<T, E> lands in src/shared/ in this change"
+  - "Delivery as chained PRs if the tasks forecast confirms budget risk (Slice A precedent: 3 chained PRs)"
+
+scope_boundary:
+  in: src/domain/beacon/, src/shared/, tests/domain/beacon/
+  out: fs-beacon-store adapter, verification, evidence, staleness, application use cases, CLI
+
+phases:
+  explore:
+    status: done
+    artifacts:
+      engram: sdd/beacon-core/explore (observation 2093)
+    note: Read-only explorer persisted to Engram only; no openspec mirror written for this phase.
+  research:
+    status: skipped
+    note: Offered at the pre-proposal gate; operator declined (2026-09-02).
+  pre_proposal:
+    status: confirmed
+    artifacts:
+      engram: sdd/beacon-core/pre-proposal (observation 2095)
+  proposal:
+    status: done
+    artifacts:
+      openspec: openspec/changes/beacon-core/proposal.md
+      engram: sdd/beacon-core/proposal
+    capabilities:
+      new:
+        - beacon-draft-lifecycle
+        - beacon-version-lifecycle
+      modified:
+        - project-toolchain
+    budget_note: >
+      Budget risk assumed High on the Slice A precedent (~775 authored lines for a
+      comparable pure-domain capability against the 400-line budget). Chained PRs
+      C1 -> C2 planned, to be ratified against the exact sdd-tasks forecast.
+  spec:
+    status: done
+    artifacts:
+      openspec:
+        - openspec/changes/beacon-core/specs/beacon-draft-lifecycle/spec.md
+        - openspec/changes/beacon-core/specs/beacon-version-lifecycle/spec.md
+        - openspec/changes/beacon-core/specs/project-toolchain/spec.md
+      engram: sdd/beacon-core/spec
+    capabilities:
+      new:
+        - beacon-draft-lifecycle
+        - beacon-version-lifecycle
+      modified:
+        - project-toolchain
+    remediation:
+      amended: 2026-09-02
+      reason: >
+        Post-review, post-archive spec amendment. Operator review (2026-09-02,
+        Engram observation 2142) confirmed 3 code blockers against ratified
+        spec text and ratified 4 remediation decisions. Specs amended to
+        contract-anchor the fix, not to reopen scope.
+      changes:
+        - "beacon-version-lifecycle: pinned the null-active stale-origin
+          direction with one added scenario under Stale-Origin Approval
+          Requires Explicit Acknowledgment (requirement wording was already
+          correct; the implementation was not)."
+        - "beacon-version-lifecycle: extended resolveActiveVersion Is a Pure
+          Lookup to require the resolved record's embedded versionId to equal
+          its activeVersionId lookup key, throwing on mismatch; added one
+          scenario."
+        - "beacon-draft-lifecycle: added a new domain-wide requirement,
+          Record Lookups Use Own-Property Semantics, with two scenarios
+          (createDraft, forkDraft) pinning Object.prototype-safe lookups."
+        - "beacon-draft-lifecycle: replaced the abandonDraft-has-no-hash C1
+          narrowing with a finalHash: string tombstone field backed by a
+          Hasher parameter, aligned with docs/lifecycle-and-schema-specification-v1.md
+          Abandoned drafts; updated Purpose and the abandonDraft requirement
+          accordingly."
+      counts:
+        beacon-draft-lifecycle: { requirements: 7, scenarios: 12 }
+        beacon-version-lifecycle: { requirements: 6, scenarios: 10 }
+      promoted_specs_amended:
+        - openspec/specs/beacon-draft-lifecycle/spec.md
+        - openspec/specs/beacon-version-lifecycle/spec.md
+      note: Delta (changes/) and promoted (specs/) copies verified byte-identical per capability after amendment.
+  design:
+    status: done
+    artifacts:
+      openspec: openspec/changes/beacon-core/design.md
+      engram: sdd/beacon-core/design
+    work_units:
+      - { id: C1a, nominal_lines: 387 }
+      - { id: C1b, nominal_lines: 153 }
+      - { id: C1c, nominal_lines: 162 }
+      - { id: C2a, nominal_lines: 387 }
+      - { id: C2b, nominal_lines: 270 }
+      - { id: C2c, nominal_lines: 155 }
+    budget_note: >
+      Nominal authored-line forecast: C1 ~702 (1.8x budget), C2 ~812 (2.0x budget).
+      Both exceed the 400-line budget and MUST be chained. Forecasts are lower
+      bounds: Slice A missed by 2.1x, so the calibrated band is C1 ~1120-1470 and
+      C2 ~1300-1710. Expect ask-on-risk at apply for units C1a and C2a.
+    remediation:
+      amended: 2026-09-02
+      reason: >
+        Post-review design amendment following the spec amendment recorded under
+        phases.spec.remediation. Operator review (Engram observation 2142)
+        confirmed 3 code blockers; design.md was conformed to the amended delta
+        specs so implementation has an authoritative HOW. No scope reopened.
+      changes:
+        - "Stale-origin gate restated as plain inequality
+          `draft.origin.branchedFromVersion !== beacon.activeVersionId` (only
+          equality is fresh; both null directions are stale). New ADR row 11;
+          refusal-taxonomy condition line and the approval data-flow diagram
+          updated. Position in the pinned approval check order is unchanged."
+        - "New domain-wide convention: every caller-supplied-id lookup against a
+          Record-shaped store routes through an internal `getOwn(record, key)`
+          helper in src/domain/beacon/records.ts (Object.hasOwn guard). New ADR
+          row 12 plus an exhaustive touch-point table covering createDraft,
+          updateDraft, forkDraft (x2), abandonDraft, approveDraft (x3),
+          revokeVersion, resolveActiveVersion. No new refusal token."
+        - "ADR row 5 extended: resolveActiveVersion also throws when the resolved
+          record's embedded versionId differs from its lookup key. New ADR row 13
+          decides that revokeVersion/approveDraft do NOT get the same check,
+          with rationale and rejected alternatives."
+        - "Abandoned Draft variant gains `finalHash: string`; abandonDraft gains a
+          Hasher parameter and records hasher.hash(project(draft.content)). ADR
+          row 10 widened to cover abandonment; the prior 'C1 has no Hasher
+          dependency' claim explicitly voided; new abandonment data-flow section."
+        - "Work-unit table rebuilt against the landed 7-commit stack (C2a split
+          into C2a-1/C2a-2) with per-unit remediation line deltas; fixes are
+          woven into the original commits by rebase, not appended."
+      work_unit_deltas:
+        - { id: C1a, landed: 293, remediation_lines: "45-70", new_total: "338-363" }
+        - { id: C1b, landed: 198, remediation_lines: "12-25", new_total: "210-223" }
+        - { id: C1c, landed: 277, remediation_lines: "55-80", new_total: "332-357" }
+        - { id: C2a-1, landed: 258, remediation_lines: "0-5", new_total: "258-263" }
+        - { id: C2a-2, landed: 232, remediation_lines: "35-50", new_total: "267-282" }
+        - { id: C2b, landed: 545, remediation_lines: "25-40", new_total: "570-585", note: "size:exception already ratified at 545; new total needs operator re-confirmation" }
+        - { id: C2c, landed: 186, remediation_lines: "0", new_total: 186, note: "rebase only, no authored change" }
+      remediation_total_lines: "172-270"
+      budget_status: >
+        Every unit except C2b remains under the 400-line budget after the
+        remediation delta. C2b stays the single size:exception unit; its total
+        moves from the ratified 545 to ~570-585.
+  tasks:
+    status: done
+    artifacts:
+      openspec: openspec/changes/beacon-core/tasks.md
+      engram: sdd/beacon-core/tasks
+    forecast:
+      budget_risk: High
+      chained_prs_recommended: true
+      chain_strategy: pending
+      decision_needed_before_apply: true
+      nominal_lines: 1514
+      calibrated_band: "2420-3180"
+    remediation:
+      amended: 2026-09-02
+      reason: >
+        Second-pass remediation task breakdown appended to tasks.md (Phase
+        8-16) against the amended spec + design remediation ([R] rows 5,
+        10-13; getOwn helper; finalHash tombstone field; plain-inequality
+        stale-origin gate). Fixes are woven into the original stacked commits
+        via interactive rebase, not appended as a new unit; PR #9 splits into
+        C2a-1 (versions model) and C2a-2 (revocation) per operator
+        ratification.
+      per_unit_new_totals:
+        - { id: C1a, new_total: "338-363" }
+        - { id: C1b, new_total: "210-223" }
+        - { id: C1c, new_total: "332-357" }
+        - { id: C2a-1, new_total: "258-263" }
+        - { id: C2a-2, new_total: "267-282" }
+        - { id: C2b, new_total: "570-585", exception: "size:exception, ratified up to 600" }
+        - { id: C2c, new_total: 186 }
+      decision_needed_before_apply: true
+      chain_strategy: stacked-to-main (existing), C2a split into two PRs
+  apply:
+    status: done
+    artifacts:
+      openspec: openspec/changes/beacon-core/apply-progress.md
+      engram: sdd/beacon-core/apply-progress
+    work_units_landed:
+      - { id: C1a, branch: change/beacon-core-c1a, commit: 0e923d2, authored_lines: 293 }
+      - { id: C1b, branch: change/beacon-core-c1b, commit: e115d1c, authored_lines: 198 }
+      - { id: C1c, branch: change/beacon-core-c1c, commit: 2244cac, authored_lines: 277 }
+      - { id: C2a-1, branch: change/beacon-core-c2a, commit: ea01c9b, authored_lines: 258, note: relief (ii) split }
+      - { id: C2a-2, branch: change/beacon-core-c2a, commit: abfecaa, authored_lines: 232 }
+      - { id: C2b, branch: change/beacon-core-c2b, commit: 11c5936, authored_lines: 507, note: "size:exception pre-authorized by operator" }
+      - { id: C2b-r1, branch: change/beacon-core-c2b, commit: 84f6635, authored_lines: 38, note: "verify remediation: acknowledged stale-origin test (C2b PR total 545, within ratified exception)" }
+      - { id: C2c, branch: change/beacon-core-c2c, commit: 222b24e, authored_lines: 186, note: "rebased from 7f64e45 onto remediated c2b" }
+    tasks_complete: 61/61
+    phase7_evidence: >
+      2026-09-02 orchestrator run on change/beacon-core-c2c: npm ci clean; npm test
+      116/116 (10 files); npm run build, lint, typecheck all exit 0; frozen-dir diff
+      vs 582fc1f empty; boundaries test 2/2; beacon/shared imports all relative;
+      base placeholders confirmed `export {};` (stack purely additive: 15 files,
+      1924 insertions, 2 deletions vs calibrated band 2420-3180 — under band).
+    attempts:
+      - { work_unit: c1-stack, outcome: passed, evidence: "sha256:d8465299cdffe4626c6fc797bdf0b15185663b73da6b10951b463ac5aea85c7e" }
+      - { work_unit: c2-stack, outcome: passed, evidence: "sha256:1377354fd7f2e810697211356b6929f4fe9cbeb0bdddfb29a3af07348ed907c8" }
+      - { work_unit: c2b-stale-origin-test, outcome: passed, evidence: "sha256:81b6a2f1656ff9c75b6a17d5f28d4dbafbe2b0837ffa843dd4c03b8c46f90801" }
+  verify:
+    status: done
+    verdict: pass
+    artifacts:
+      openspec: openspec/changes/beacon-core/verify-report.md
+      engram: sdd/beacon-core/verify-report
+    summary: >
+      Re-verify after remediation: 117/117 tests, lint, typecheck, build,
+      stack integrity (8 commits, master untouched at 582fc1f, no AI
+      attribution), design fidelity, and purity all pass. The prior CRITICAL
+      blocker (beacon-version-lifecycle "Stale origin with acknowledgment
+      proceeds" UNTESTED) is remediated by commit 84f6635 on
+      change/beacon-core-c2b, with genuine vacuous-guard RED evidence
+      recorded in apply-progress.md; change/beacon-core-c2c rebased
+      7f64e45 -> 222b24e onto the remediated c2b tip. 21/21 scenarios
+      compliant, 13/13 requirements fully satisfied. 0 CRITICAL, 0 WARNING.
+  archive:
+    status: done
+    artifacts:
+      openspec:
+        - openspec/specs/beacon-draft-lifecycle/spec.md
+        - openspec/specs/beacon-version-lifecycle/spec.md
+        - openspec/specs/project-toolchain/spec.md
+        - openspec/changes/beacon-core/archive-report.md
+        - openspec/changes/beacon-core/sync-report.md
+      engram: sdd/beacon-core/archive-report
+    summary: >
+      Spec deltas merged into main specs (2 new, 1 modified). Archive folder
+      move pending-delivery per operator workflow: openspec/changes/beacon-core/
+      retained in active directory; operator will move to archive/2026-09-02-beacon-core/
+      as part of final chore commit. All 61 tasks complete. Verify PASS (117/117 tests,
+      0 CRITICAL). 6 chained PRs stacked to master 582fc1f, ready for operator delivery.
+    folder_move_status: pending-delivery
+    note: >
+      This change follows hybrid-mode archive policy: spec syncs completed and
+      committed to openspec/ immediately; folder move deferred to operator-owned
+      delivery commit per Slice A precedent. Archive report and traceability
+      recorded in both openspec/changes/beacon-core/ and Engram
+      (sdd/beacon-core/archive-report).
