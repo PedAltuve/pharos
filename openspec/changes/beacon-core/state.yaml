@@ -223,16 +223,45 @@ phases:
     artifacts:
       openspec: openspec/changes/beacon-core/verify-report.md
       engram: sdd/beacon-core/verify-report
+    remediation:
+      amended: 2026-09-02
+      reason: >
+        Final re-verify after the operator-ratified remediation rebase
+        (state.yaml phases.spec.remediation / phases.design.remediation /
+        phases.tasks.remediation). All 4 remediation fixes (plain-inequality
+        stale-origin gate, 10-site getOwn own-property routing,
+        resolveActiveVersion identity-mismatch throw, abandonDraft
+        Hasher/finalHash) independently re-verified in this session against
+        the exact operator-review reproductions, each run isolated via
+        `vitest -t` and confirmed to refuse/throw/succeed correctly. Full
+        scenario mapping re-run against the amended specs (14 req/25
+        scenarios, counted directly from the three spec files); 21 previously
+        -verified scenarios reconfirmed, 4 new/amended scenarios verified in
+        depth (record-lookup own-property semantics x2, null-active
+        stale-origin, resolveActiveVersion identity mismatch).
+      superseded_summary: >
+        Prior verify (117/117 tests, 21/21 scenarios, 13/13 requirements) was
+        run on the pre-remediation-rebase 8-commit stack
+        (...84f6635 -> 222b24e); superseded by this final verify on the
+        rebuilt 9-commit stack (bf058ff -> 312696b + docs-only f266ca7).
     summary: >
-      Re-verify after remediation: 117/117 tests, lint, typecheck, build,
-      stack integrity (8 commits, master untouched at 582fc1f, no AI
-      attribution), design fidelity, and purity all pass. The prior CRITICAL
-      blocker (beacon-version-lifecycle "Stale origin with acknowledgment
-      proceeds" UNTESTED) is remediated by commit 84f6635 on
-      change/beacon-core-c2b, with genuine vacuous-guard RED evidence
-      recorded in apply-progress.md; change/beacon-core-c2c rebased
-      7f64e45 -> 222b24e onto the remediated c2b tip. 21/21 scenarios
-      compliant, 13/13 requirements fully satisfied. 0 CRITICAL, 0 WARNING.
+      FINAL re-verify on the rebuilt post-remediation-rebase stack
+      (change/beacon-core-c2c at f266ca7): 128/128 tests, lint, typecheck,
+      build, and tests/architecture/boundaries.test.ts all exit 0. Stack
+      integrity independently confirmed via git merge-base at all 7 branch
+      transitions across the 9-commit stack (bf058ff -> 8753c38 -> ac48d48 ->
+      5b8a495 -> 7893900 -> d389973 -> f7cadf4 -> 312696b -> f266ca7);
+      master untouched at 582fc1f; no AI attribution in any commit; the
+      docs-only artifacts commit f266ca7 contains exactly
+      openspec/changes/beacon-core/** and the three promoted spec dirs.
+      Line accounting independently reproduced and matches
+      apply-progress.md exactly, including the operator-ratified C2b
+      size:exception at 611. All 4 remediation fixes confirmed present in
+      source and independently re-executed against the original operator
+      -review reproductions. 25/25 scenarios compliant against the amended
+      specs, 14/14 requirements fully satisfied. 0 CRITICAL, 1 informational
+      WARNING (tasks 8.10/16.6, force-push deferred to orchestrator delivery
+      step, non-blocking).
   archive:
     status: done
     artifacts:
