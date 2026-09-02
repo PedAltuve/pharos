@@ -40,6 +40,7 @@ export type Draft =
       readonly label: string;
       readonly origin: DraftOrigin;
       readonly finalRevision: number;
+      readonly finalHash: string;
       readonly reason: string;
       readonly abandonedAt: string;
     };
