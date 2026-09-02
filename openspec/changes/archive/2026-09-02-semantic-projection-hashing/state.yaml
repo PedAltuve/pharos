@@ -1,0 +1,10 @@
+change: semantic-projection-hashing
+project: pharos
+artifact_store: hybrid
+status: archived
+verdict: PASS
+requirements: 7/7
+scenarios: 12/12
+tasks: 23/23
+evidence_revision: sha256:84dd445b0b973643f1d5d417f6d024903f1b15f7dd96754e7665a2df57cbed80
+archived_path: openspec/changes/archive/2026-09-02-semantic-projection-hashing

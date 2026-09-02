@@ -55,6 +55,7 @@ src/
     fs-evidence-store/   # content-addressed evidence objects
     playwright/          # recorder + runner + evidence collection
     engram-discovery/    # optional, non-authoritative
+    hashing/            # RFC 8785 canonicalization + SHA-256
   cli/               # Commander commands, clack flows, output envelopes
   shared/            # result types, error taxonomy, canonical JSON utils
 ```
