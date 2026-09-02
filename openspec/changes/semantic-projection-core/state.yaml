@@ -1,0 +1,67 @@
+change: semantic-projection-core
+project: pharos
+created: 2026-09-02
+artifact_store: hybrid (authoritative openspec per native dispatcher)
+execution_mode: auto
+delivery_strategy: ask-on-risk
+review_budget_lines: 400
+strict_tdd: true
+
+relations:
+  successor: semantic-projection-hashing (Slice B, depends on this change's type model)
+  shared_exploration: sdd/semantic-projection/explore (Engram observation 2040)
+
+operator_decisions:
+  - "Split into two changes (core + hashing) ratified by user 2026-09-02"
+  - "Research offered and declined 2026-09-02"
+  - "Delivery: 3 chained PRs (A1 -> A2 -> A3), chain strategy stacked-to-main, ratified at the review workload guard 2026-09-02"
+
+orchestrator_rulings:
+  - "Migration equivalence = deep structural equality of projections (lifecycle spec section 5 literal wording); sha256 fingerprint stays a port-derived approval artifact"
+  - "Checkpoints keyed by default, ordered only when explicitly declared ordered (lifecycle spec section 4)"
+  - "src/adapters/hashing/ approved as new adapter dir; technical-design section 2 amended in Slice B with MODIFIED toolchain spec delta"
+
+phases:
+  explore:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/exploration.md
+      engram: sdd/semantic-projection/explore (observation 2040)
+    note: Read-only explorer persisted to Engram; orchestrator wrote the openspec mirror.
+  research:
+    status: skipped
+    note: Offered after explore; user declined (2026-09-02).
+  proposal:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/proposal.md
+      engram: sdd/semantic-projection-core/proposal (observation 2042)
+  spec:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/specs/semantic-projection/spec.md
+      engram: sdd/semantic-projection-core/spec (observation 2043)
+    counts: 6 requirements, 12 scenarios
+  design:
+    status: done
+    gate: fresh-context validator PASS, all hallucination checks verified vs source docs (2026-09-02)
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/design.md
+      engram: sdd/semantic-projection-core/design (observation 2045)
+    budget_note: >
+      Design refined the authored-line estimate UP to ~775 vs the 400 budget
+      (exploration missed arbitraries module, property-suite file, SemanticSource
+      input types). Proposes 3-way chained split A1 ~223 / A2 ~301 / A3 ~250.
+      Operator ask-on-risk decision due after the tasks forecast.
+  tasks:
+    status: done
+    artifacts:
+      openspec: openspec/changes/semantic-projection-core/tasks.md
+      engram: sdd/semantic-projection-core/tasks
+    review_workload_forecast: "~775 authored lines (343 prod + 430 tests), risk High ~1.9x budget, chained PRs recommended A1 ~223 -> A2 ~301 -> A3 ~250, decision needed before apply: YES"
+  apply:
+    status: pending
+  verify:
+    status: pending
+  archive:
+    status: pending
