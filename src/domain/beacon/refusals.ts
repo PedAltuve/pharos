@@ -37,6 +37,25 @@ export interface VersionAlreadyRevoked {
   readonly versionId: string;
 }
 
+export interface DuplicateVersionId {
+  readonly rule: "duplicate-version-id";
+  readonly versionId: string;
+}
+
+export interface ReviewedHashMismatch {
+  readonly rule: "reviewed-hash-mismatch";
+  readonly draftId: string;
+  readonly reviewedHash: string;
+  readonly currentHash: string;
+}
+
+export interface StaleOriginNotAcknowledged {
+  readonly rule: "stale-origin-not-acknowledged";
+  readonly draftId: string;
+  readonly branchedFromVersion: string | null;
+  readonly activeVersionId: string | null;
+}
+
 export type BeaconRefusal =
   | DuplicateDraftId
   | DraftNotFound
@@ -44,4 +63,7 @@ export type BeaconRefusal =
   | StaleDraftRevision
   | SourceDraftHasNoContent
   | VersionNotFound
-  | VersionAlreadyRevoked;
+  | VersionAlreadyRevoked
+  | DuplicateVersionId
+  | ReviewedHashMismatch
+  | StaleOriginNotAcknowledged;
