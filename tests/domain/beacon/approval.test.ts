@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { approveDraft } from "../../../src/domain/beacon/index.js";
+import { approveDraft, createDraft, revokeVersion } from "../../../src/domain/beacon/index.js";
 import type { Beacon, Draft, DraftOrigin, Version } from "../../../src/domain/beacon/index.js";
 import { project } from "../../../src/domain/semantics/index.js";
 import type { Hasher } from "../../../src/domain/ports/index.js";
@@ -454,6 +454,85 @@ describe("approveDraft: port composition with the real JcsSha256Hasher", () => {
   });
 });
 
+describe("approveDraft: supersession", () => {
+  it("supersedes the prior active version and activates the new one at the next localNumber", () => {
+    const priorActive = activeVersion("ver_1", 1);
+    const beacon: Beacon = {
+      ...withOpenDraft(baseBeacon(), "drf_2", baseContent(), {
+        ...baseOrigin(),
+        branchedFromVersion: "ver_1",
+      }),
+      versions: { ver_1: priorActive },
+      activeVersionId: "ver_1",
+    };
+    const reviewedHash = stubHasher.hash(project(baseContent()));
+
+    const result = approveDraft(
+      beacon,
+      {
+        draftId: "drf_2",
+        versionId: "ver_2",
+        approvedAt: "2026-03-01T00:00:00.000Z",
+        actor: "operator_1",
+        reviewedHash,
+        staleOriginAcknowledged: false,
+      },
+      stubHasher,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const superseded = result.value.versions["ver_1"];
+    expect(superseded?.status).toBe("superseded");
+    if (superseded?.status === "superseded") {
+      expect(superseded.supersededBy).toBe("ver_2");
+      expect(superseded.supersededAt).toBe("2026-03-01T00:00:00.000Z");
+    }
+
+    const newActive = result.value.versions["ver_2"];
+    expect(newActive?.status).toBe("active");
+    expect(newActive?.localNumber).toBe(2);
+    expect(result.value.activeVersionId).toBe("ver_2");
+  });
+
+  it("supersedes a prior active version keyed by a prototype-shadowing id (getOwn routing)", () => {
+    const priorActive = activeVersion("toString", 1);
+    const beacon: Beacon = {
+      ...withOpenDraft(baseBeacon(), "drf_2", baseContent(), {
+        ...baseOrigin(),
+        branchedFromVersion: "toString",
+      }),
+      versions: { toString: priorActive },
+      activeVersionId: "toString",
+    };
+    const reviewedHash = stubHasher.hash(project(baseContent()));
+
+    const result = approveDraft(
+      beacon,
+      {
+        draftId: "drf_2",
+        versionId: "ver_2",
+        approvedAt: "2026-03-01T00:00:00.000Z",
+        actor: "operator_1",
+        reviewedHash,
+        staleOriginAcknowledged: false,
+      },
+      stubHasher,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const superseded = result.value.versions["toString"];
+    expect(superseded?.status).toBe("superseded");
+    if (superseded?.status === "superseded") {
+      expect(superseded.supersededBy).toBe("ver_2");
+    }
+    expect(result.value.activeVersionId).toBe("ver_2");
+  });
+});
+
 describe("property 6: hash binding", () => {
   it("approving with a reviewedHash derived from different content always refuses reviewed-hash-mismatch", () => {
     fc.assert(
@@ -490,6 +569,121 @@ describe("property 6: hash binding", () => {
           });
         },
       ),
+    );
+  });
+});
+
+interface SequenceStep {
+  readonly kind: "approve" | "revoke";
+  readonly pick: number;
+}
+
+const arbSequenceStep: fc.Arbitrary<SequenceStep> = fc.record({
+  kind: fc.constantFrom("approve" as const, "revoke" as const),
+  pick: fc.nat({ max: 1000 }),
+});
+
+const arbSequence: fc.Arbitrary<readonly SequenceStep[]> = fc.array(arbSequenceStep, {
+  minLength: 1,
+  maxLength: 8,
+});
+
+/**
+ * Drives `beacon` through a sequence of approvals and revocations,
+ * ignoring any step that refuses. Approvals always use a fresh draft/id
+ * pair, a matching reviewed hash, and acknowledge stale origin so the
+ * step exercises supersession rather than an admission-check refusal.
+ */
+function applySequence(steps: readonly SequenceStep[]): Beacon {
+  let beacon = baseBeacon();
+  let counter = 0;
+
+  for (const step of steps) {
+    if (step.kind === "approve") {
+      const draftId = `drf_seq_${counter}`;
+      const versionId = `ver_seq_${counter}`;
+      counter += 1;
+
+      const created = createDraft(beacon, {
+        draftId,
+        label: "Sequence draft",
+        content: baseContent(),
+        origin: { ...baseOrigin(), branchedFromVersion: beacon.activeVersionId },
+      });
+      if (!created.ok) continue;
+      beacon = created.value;
+
+      const reviewedHash = stubHasher.hash(project(baseContent()));
+      const approved = approveDraft(
+        beacon,
+        {
+          draftId,
+          versionId,
+          approvedAt: `2026-04-01T00:00:00.${String(counter).padStart(3, "0")}Z`,
+          actor: "operator_1",
+          reviewedHash,
+          staleOriginAcknowledged: true,
+        },
+        stubHasher,
+      );
+      if (approved.ok) {
+        beacon = approved.value;
+      }
+    } else {
+      const versionIds = Object.keys(beacon.versions);
+      if (versionIds.length === 0) continue;
+      const versionId = versionIds[step.pick % versionIds.length] as string;
+
+      const revoked = revokeVersion(beacon, {
+        versionId,
+        reason: "Sequence revocation",
+        actor: "operator_1",
+        revokedAt: `2026-05-01T00:00:00.${String(counter).padStart(3, "0")}Z`,
+      });
+      if (revoked.ok) {
+        beacon = revoked.value;
+      }
+    }
+  }
+
+  return beacon;
+}
+
+describe("property 4: at most one active version", () => {
+  it("after any sequence of approvals and revocations, at most one version is active and activeVersionId names exactly that version or is null", () => {
+    fc.assert(
+      fc.property(arbSequence, (steps) => {
+        const beacon = applySequence(steps);
+
+        const activeVersions = Object.values(beacon.versions).filter(
+          (version) => version.status === "active",
+        );
+        expect(activeVersions.length).toBeLessThanOrEqual(1);
+
+        if (beacon.activeVersionId === null) {
+          expect(activeVersions.length).toBe(0);
+        } else {
+          expect(activeVersions.length).toBe(1);
+          expect(activeVersions[0]?.versionId).toBe(beacon.activeVersionId);
+        }
+      }),
+    );
+  });
+});
+
+describe("property 5: monotonic numbering", () => {
+  it("local numbers strictly increase in approval order and are never reused, including after revocations", () => {
+    fc.assert(
+      fc.property(arbSequence, (steps) => {
+        const beacon = applySequence(steps);
+
+        const localNumbers = Object.values(beacon.versions)
+          .map((version) => version.localNumber)
+          .sort((a, b) => a - b);
+        const uniqueNumbers = new Set(localNumbers);
+
+        expect(uniqueNumbers.size).toBe(localNumbers.length);
+      }),
     );
   });
 });

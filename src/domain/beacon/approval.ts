@@ -52,10 +52,16 @@ export function approveDraft(
     });
   }
 
+  const nextLocalNumber =
+    Object.values(beacon.versions).reduce(
+      (max, version) => Math.max(max, version.localNumber),
+      0,
+    ) + 1;
+
   const newVersion: Version = {
     status: "active",
     versionId: cmd.versionId,
-    localNumber: 1,
+    localNumber: nextLocalNumber,
     approval: {
       approvedAt: cmd.approvedAt,
       reviewedHash: cmd.reviewedHash,
@@ -82,10 +88,26 @@ export function approveDraft(
     closedAt: cmd.approvedAt,
   };
 
+  const versions = { ...beacon.versions, [cmd.versionId]: newVersion };
+  if (beacon.activeVersionId !== null) {
+    const priorActive = getOwn(beacon.versions, beacon.activeVersionId);
+    if (priorActive !== undefined && priorActive.status === "active") {
+      versions[beacon.activeVersionId] = {
+        versionId: priorActive.versionId,
+        localNumber: priorActive.localNumber,
+        approval: priorActive.approval,
+        provenance: priorActive.provenance,
+        status: "superseded",
+        supersededBy: cmd.versionId,
+        supersededAt: cmd.approvedAt,
+      };
+    }
+  }
+
   return ok({
     ...beacon,
     drafts: { ...beacon.drafts, [cmd.draftId]: closedDraft },
-    versions: { ...beacon.versions, [cmd.versionId]: newVersion },
+    versions,
     activeVersionId: cmd.versionId,
   });
 }
