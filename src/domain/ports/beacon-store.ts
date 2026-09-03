@@ -1,0 +1,59 @@
+import type { Result } from "../../shared/result.js";
+import type {
+  AbandonDraftCommand,
+  ActiveVersion,
+  ApproveDraftCommand,
+  Beacon,
+  CreateDraftCommand,
+  ForkDraftCommand,
+  RevokeVersionCommand,
+  UpdateDraftCommand,
+} from "../beacon/index.js";
+import type { BeaconStoreRefusal } from "./beacon-store-refusals.js";
+
+export type IdempotencyKey = string;
+
+// createDraft also bootstraps beacon.json when the beacon does not exist yet.
+// beaconTitle is used only on bootstrap.
+export interface StoreCreateDraftCommand extends CreateDraftCommand {
+  readonly beaconTitle: string;
+}
+
+export interface BeaconStore {
+  getBeacon(beaconId: string): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  listBeacons(): Promise<Result<readonly Beacon[], BeaconStoreRefusal>>;
+  getActiveVersion(
+    beaconId: string,
+  ): Promise<Result<ActiveVersion | null, BeaconStoreRefusal>>;
+
+  createDraft(
+    beaconId: string,
+    cmd: StoreCreateDraftCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  updateDraft(
+    beaconId: string,
+    cmd: UpdateDraftCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  forkDraft(
+    beaconId: string,
+    cmd: ForkDraftCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  abandonDraft(
+    beaconId: string,
+    cmd: AbandonDraftCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  approveDraft(
+    beaconId: string,
+    cmd: ApproveDraftCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  revokeVersion(
+    beaconId: string,
+    cmd: RevokeVersionCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+}
