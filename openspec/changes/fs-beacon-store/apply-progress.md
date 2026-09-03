@@ -207,3 +207,77 @@ No implementation tasks remain in U3. Parent lifecycle action: resolve the over-
 ## U3 Finalization — operator-approved size exception
 
 The operator approved `size:exception` for this cohesive U3 slice at a **550-line cap**. Observed authored code/test diff: **438 lines** (`250` production + `188` test); native accounting including required task/progress evidence: **538 lines**. No split, code-golfing, rebase, or amendment was performed. Final verification from the current candidate is green: focused lock tests **10/10** (exit 0), `npm run lint` (exit 0; pre-existing boundaries deprecation warnings only), `npx tsc --noEmit` (exit 0), and `git diff --check` (exit 0). The recovery-spec citation remains underspecified for this work: `specs/beacon-store-recovery/spec.md` has no R4/S2/S3; the actual lock requirement is in `specs/fs-beacon-store/spec.md`.
+
+## Work Unit U4a — Layout, id validation, and records (U4 tasks 4.1–4.7)
+
+**Status**: implementation complete. Tasks `4.1`–`4.7` are checked off in `tasks.md`; U4b (`4.8`–`4.20`) remains deferred.
+**Branch**: `change/fs-beacon-store-u4`, based on U3 commit `8979ae5`; lock source and tests were inspected and not modified.
+**Mode**: Strict TDD.
+**Structured status consumed**: schema `gentle-ai.sdd-status` v2; `changeName=fs-beacon-store`; artifact store `openspec`; `dependencies.apply=ready`; `nextRecommended=apply`; blocked reasons empty; `actionContext.mode=repo-local`; workspace `/home/pedro/pharos`; parent supplied native attempt authority and this phase did not acquire or settle an attempt. No action-context warning or edit-root violation was observed.
+**Workload / PR boundary**: `stacked-to-main`, U4a only, layout/records half of U4. Authored additions plus deletions for source and tests: **238 lines** (`119` production, `119` tests; additions only), below the 400-line cap. No `size:exception` needed.
+
+### Completed Tasks and Persisted Checkbox Updates
+
+- [x] 4.1 RED/GREEN — added path-construction coverage for `lock`, journal idempotency entries, beacon/draft/version directories, and all required record files. The test was observed failing before `layout.ts` existed, then passed after `createLayout` was implemented.
+- [x] 4.2 GREEN — created `layout.ts` with all D2/§4 path builders, sorted project-level beacon filtering for `project.json`, `lock`, `journal`, and `.tmp.` names, and D7 layer-1 validation.
+- [x] 4.3 RED/GREEN — added independent tests for disk-origin `corrupt`, caller existing-state `not-found`, and caller creation-state `invalid-id` outcomes.
+- [x] 4.4 GREEN — implemented provenance-aware classification. The `creation` provenance explicitly covers `createDraft`'s `beaconId` special case as well as newly-created draft/version ids; invalid caller input remains a value classification, never a throw.
+- [x] 4.5 RED/GREEN — added and passed the `bcn_a.tmp.1` collision test; validation rejects the id before a path can be constructed and before listing exclusion can make it disappear.
+- [x] 4.6 RED/GREEN — added adversarial record tests for `__proto__`, `constructor`, and `toString`, plus prototype-safe own-property lookup.
+- [x] 4.7 GREEN — created adapter-local `records.ts` using `Map` accumulation and `Object.fromEntries`; `getOwn` is local and is not re-exported from the domain.
+
+### TDD Cycle Evidence
+
+| Task | RED observation | GREEN / triangulation / refactor |
+|---|---|---|
+| 4.1 | `npx vitest run tests/adapters/fs-beacon-store/layout.test.ts` → failed suite with `Error: Cannot find module '../../../src/adapters/fs-beacon-store/layout.js'` at the test import; `0 test` executed. | Implemented `createLayout`; focused layout/records run passed. Triangulation covered the complete path set and project filtering; no refactor needed. |
+| 4.3 | After adding the three provenance cases before the classifier existed, the focused run produced 3 failures: `TypeError: classifyId is not a function` at the classifier assertions. | Implemented `classifyId` with `disk` → `corrupt`, `existing` → `not-found`, and `creation` → `invalid-id`; all provenance cases passed. |
+| 4.5 | Temporarily removed the `.tmp.` predicate after the provenance implementation; `npx vitest run .../layout.test.ts` failed the collision case with `AssertionError: expected true to be false` (`Received true`). | Restored the `.tmp.` rejection; collision and all layout cases passed. |
+| 4.6 | `npx vitest run tests/adapters/fs-beacon-store/records.test.ts` → failed suite with `Error: Cannot find module '../../../src/adapters/fs-beacon-store/records.js'`; `0 test` executed. | Implemented `recordFromEntries` and adapter-local `getOwn`; records tests passed. |
+
+### Verification Evidence
+
+- Focused tests: `npx vitest run tests/adapters/fs-beacon-store/layout.test.ts tests/adapters/fs-beacon-store/records.test.ts` → **2 files, 10 tests passed**, exit 0.
+- `npm run lint` → exit 0; only pre-existing `eslint-plugin-boundaries` deprecation warnings.
+- `npx tsc --noEmit` → exit 0, no output.
+- `git diff --check` → exit 0.
+- Runtime boundary: **N/A** — U4a contains pure path/classification/record helpers and has no filesystem I/O harness; tests use deterministic in-memory values.
+
+### Files Changed
+
+- `src/adapters/fs-beacon-store/layout.ts` — created path layout, listing filter, id validation, and provenance classification.
+- `src/adapters/fs-beacon-store/records.ts` — created Map/Object.fromEntries record materialization and local `getOwn`.
+- `tests/adapters/fs-beacon-store/layout.test.ts` — path, filter, validation, provenance, and `.tmp.` collision tests.
+- `tests/adapters/fs-beacon-store/records.test.ts` — adversarial record and own-property tests.
+- `openspec/changes/fs-beacon-store/tasks.md` — only checkboxes `4.1`–`4.7` changed to checked.
+- `openspec/changes/fs-beacon-store/apply-progress.md` — appended this U4a evidence section.
+
+### Deviations, Underspecification, and Risks
+
+- No deviation from D7/D9. The design does not mandate export names, so U4a exposes a cohesive `createLayout` object plus `isValidId`/`classifyId` helpers for later adapter units.
+- The three invalid-input outcomes are classifications in U4a; the reconstruction-boundary throw for disk-origin corruption remains intentionally deferred to U5 as the task specifies.
+- No runtime harness applies to this pure helper unit. The pre-existing `.gentle-ai-instance` files remained untouched and untracked.
+
+### Rollback Boundary
+
+Delete `src/adapters/fs-beacon-store/layout.ts`, `src/adapters/fs-beacon-store/records.ts`, `tests/adapters/fs-beacon-store/layout.test.ts`, and `tests/adapters/fs-beacon-store/records.test.ts`; revert only the `4.1`–`4.7` checkbox changes and this U4a section. Do not touch U1–U3 history, lock files, or either `.gentle-ai-instance` file.
+
+### Remaining Tasks
+
+U4b remains for the next bounded apply unit. Exact unchecked U4 task lines copied from `tasks.md`:
+
+- [ ] 4.8 RED: create `tests/adapters/fs-beacon-store/serialization.test.ts` — the §7 contract-string envelope round-trips for each of the 8 kinds (`pharos.beacon/1`, `pharos.beacon-active/1`, `pharos.beacon-draft/1`, `pharos.beacon-tombstone/1`, `pharos.version-manifest/1`, `pharos.beacon-semantics/1`, `pharos.version-revocation/1`, `pharos.idempotency-entry/1`); a major version other than `1` is corruption (asserted here as a classification, the throw itself lands in U5); confirm it fails. <!-- sdd-owner: implementation -->
+- [ ] 4.9 GREEN: create `src/adapters/fs-beacon-store/serialization.ts` — K1 closed-key snake_case↔camelCase bijection per file kind, authored as explicit per-file-kind object literals in a fixed order (never a generic string converter, per D8); `JSON.stringify(value, null, 2) + "\n"` output. <!-- sdd-owner: implementation -->
+- [ ] 4.10 RED: extend the test file with the K2 caller-keyed round-trip — **this is the RED test for DEF-1 MAJOR**: a `SemanticSource` whose excluded fields include `foo_bar`, `fooBar`, `__proto__`, an empty-string key, and a Unicode key round-trips **key-identical** (K2b, `draft.json`'s `content`); the same for `SemanticProjection`'s `variables`/`outcomes`/`expectations`/`entry_point.query`/`readiness_intent.isolation.scope` records (K2a — own keys verbatim, values recursed under K1/K2); each action's literal `value`, each variable's `nonSensitiveExample`, and each constraint's `value` are held verbatim (K2b, the three rows revision 3 added); confirm every one of these fails against a naive blanket-snake_case implementation before writing the exempt-node table. <!-- sdd-owner: implementation -->
+- [ ] 4.11 GREEN: implement K2a/K2b exactly per D6's exempt-node table, applied per-node (not per-file); caller-keyed nodes emit their own keys through `Array.prototype.sort()` (never `localeCompare`), noting array-index-like keys sort first in ascending numeric order regardless of insertion order. <!-- sdd-owner: implementation -->
+- [ ] 4.12 RED→GREEN: add a byte-stability test — the same logical value serializes to byte-identical output across two runs and (where feasible in CI) is asserted deterministic regardless of `Object.keys` insertion order for K1 nodes (D8). <!-- sdd-owner: implementation -->
+- [ ] 4.13 RED: create `tests/adapters/fs-beacon-store/journal.test.ts` — `keyHash(key)` is a plain SHA-256 over the key's raw UTF-8 bytes via `node:crypto`, matching the golden vector `keyHash("abc") === "ba7816bf…"` (the canonical SHA-256 of `"abc"`) and is explicitly **not** the JCS-quoted digest; confirm it fails. <!-- sdd-owner: implementation -->
+- [ ] 4.14 GREEN: create `src/adapters/fs-beacon-store/journal.ts` — `keyHash` per D6's `node:crypto` construction (three lines, no `Hasher` involvement). <!-- sdd-owner: implementation -->
+- [ ] 4.15 RED: extend the test file — each of the 6 per-method `inputHash` builders (`approveInput`, `createDraftInput`, `updateDraftInput`, `forkDraftInput`, `abandonDraftInput`, `revokeVersionInput`) compiles with an explicit `SemanticValue` return annotation and no cast, and embeds `hasher.hash(project(content))` — never the raw command interface or `SemanticProjection` — as a top-level call inside the literal (D6's typechecking constraint); confirm the naive nested-command version fails to compile/typecheck before extracting the builders. <!-- sdd-owner: implementation -->
+- [ ] 4.16 GREEN: implement the 6 builders per D6's pattern, using an injected `Hasher` (the port from `src/domain/ports/hasher.ts`, read-only import) for content-hash embedding. <!-- sdd-owner: implementation -->
+- [ ] 4.17 RED: extend the test file — journal entry create/read: `createExclusive` via the seam (through `AtomicWriter`, injected); a journal lookup by `keyHash` with an absent entry, an entry with a matching `inputHash` (replay hit), and an entry with a differing `inputHash` (conflict) are three distinguishable outcomes (the basic 3-outcome half of D6b — the fuller 6-outcome adoption-probe table is U8's, since it needs the reconstructed aggregate); confirm it fails. <!-- sdd-owner: implementation -->
+- [ ] 4.18 GREEN: implement journal entry read/write and the 3-outcome lookup. <!-- sdd-owner: implementation -->
+- [ ] 4.19 RED→GREEN: add a property test (`fast-check@4.9.0`) over `SemanticSource`/`SemanticProjection` variants differing only in `project()`-excluded fields — their `inputHash` is unaffected (D6's "logically identical input" contract for `createDraft`/`updateDraft`). <!-- sdd-owner: implementation -->
+- [ ] 4.20 Final verification: `npx vitest run tests/adapters/fs-beacon-store/{layout,records,serialization,journal}.test.ts`; `npm run lint`; `npx tsc --noEmit`. <!-- sdd-owner: implementation -->
+
+Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle action: commit this bounded U4a unit, then route the next approved lifecycle step; do not treat U4a as completion of all U4 tasks.
