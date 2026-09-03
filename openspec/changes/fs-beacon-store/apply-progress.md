@@ -281,3 +281,32 @@ U4b remains for the next bounded apply unit. Exact unchecked U4 task lines copie
 - [ ] 4.20 Final verification: `npx vitest run tests/adapters/fs-beacon-store/{layout,records,serialization,journal}.test.ts`; `npm run lint`; `npx tsc --noEmit`. <!-- sdd-owner: implementation -->
 
 Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle action: commit this bounded U4a unit, then route the next approved lifecycle step; do not treat U4a as completion of all U4 tasks.
+
+## Work Unit U4b — remediation split (U4 tasks 4.8–4.20)
+
+**Status**: remediation in progress after the operator-authorized native reset. The previously observed U4b RED/GREEN evidence is preserved below; it is not being fabricated or rerun as new RED evidence. The current candidate is being packaged into three coherent commits, each with code, tests, task checkboxes, and bounded evidence.
+**Structured status consumed**: authoritative OpenSpec status for `fs-beacon-store`; `artifactStore=openspec`; `applyState=ready`; `dependencies.apply=ready`; `nextRecommended=apply`; `actionContext.mode=repo-local`; workspace `/home/pedro/pharos`; edit surfaces are limited to the parent-authorized U4b files. Parent owns native attempt settlement against the failed evidence revision and this phase did not acquire or settle.
+**Mode**: Strict TDD. Historical U4b RED observations remain exact and are carried forward; each remediation commit receives fresh GREEN verification only.
+**Workload / PR boundary**: operator-selected `reset-and-split`, three stacked-to-main work units, maximum 400 authored additions plus deletions per commit including task/progress evidence. Runtime harness: N/A for serialization-only checks; real temporary filesystem journal harness for the journal commit.
+
+### Commit 1 — Serialization K1
+
+**Scope**: U4 tasks 4.8–4.9. Explicit per-file-kind contract envelopes, fixed-order K1 object literals, snake_case closed keys, and contract classification. K2 behavior, stability coverage, and journal work remain unchecked and uncommitted.
+**Historical TDD evidence preserved**: task 4.8 originally observed `Cannot find module '../../../src/adapters/fs-beacon-store/serialization.js'` with `0 test` executed before implementation. The original U4b run then verified all eight envelope kinds and major-version classification; this remediation does not claim that historical RED as a new observation.
+**GREEN verification**: `npx vitest run tests/adapters/fs-beacon-store/serialization.test.ts` → 1 file, 9 tests passed; `npm run lint` → exit 0 (pre-existing boundaries deprecation warnings); `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0.
+**Files**: `src/adapters/fs-beacon-store/serialization.ts`, `tests/adapters/fs-beacon-store/serialization.test.ts`, `openspec/changes/fs-beacon-store/tasks.md`, this subsection.
+**Rollback boundary**: remove the two serialization files, revert only task checkboxes 4.8–4.9, and remove this commit subsection; leave U1–U4a and all later U4b work untouched.
+
+### Commit 2 — Serialization K2 and stability
+
+**Scope**: U4 tasks 4.10–4.12. This subsection will record the exact previously observed DEF-1 RED, the D6 exempt-node implementation, explicit `Array.prototype.sort()` ordering, and byte-stability GREEN evidence.
+**Status**: deferred until Commit 1 is verified and committed.
+**Rollback boundary**: revert only the K2/stability delta and task checkboxes 4.10–4.12; retain Commit 1's K1 serialization.
+
+### Commit 3 — Journal and final verification
+
+**Scope**: U4 tasks 4.13–4.20. Raw UTF-8 keyHash, six explicit inputHash builders, absent/replay/conflict journal outcomes, property coverage, and the exact final verification sequence.
+**Status**: deferred until Commit 2 is verified and committed.
+**Rollback boundary**: remove only the journal source/test and revert task checkboxes 4.13–4.20; retain the two serialization commits.
+
+**Remaining implementation tasks**: exact unchecked rows are tasks 4.10–4.20, all marked `<!-- sdd-owner: implementation -->`; parent-owned lifecycle actions remain deferred. No review, receipt, validation actor, or delivery gate is started by sdd-apply.
