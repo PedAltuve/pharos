@@ -284,7 +284,7 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 
 ## Work Unit U4b — remediation split (U4 tasks 4.8–4.20)
 
-**Status**: remediation in progress after the operator-authorized native reset. The previously observed U4b RED/GREEN evidence is preserved below; it is not being fabricated or rerun as new RED evidence. The current candidate is being packaged into three coherent commits, each with code, tests, task checkboxes, and bounded evidence.
+**Status**: complete after the operator-authorized native reset and three-way bounded split. The previously observed U4b RED/GREEN evidence is preserved below; it was not fabricated or rerun as new RED evidence. Each commit contains code, tests, task checkboxes, and bounded evidence.
 **Structured status consumed**: authoritative OpenSpec status for `fs-beacon-store`; `artifactStore=openspec`; `applyState=ready`; `dependencies.apply=ready`; `nextRecommended=apply`; `actionContext.mode=repo-local`; workspace `/home/pedro/pharos`; edit surfaces are limited to the parent-authorized U4b files. Parent owns native attempt settlement against the failed evidence revision and this phase did not acquire or settle.
 **Mode**: Strict TDD. Historical U4b RED observations remain exact and are carried forward; each remediation commit receives fresh GREEN verification only.
 **Workload / PR boundary**: operator-selected `reset-and-split`, three stacked-to-main work units, maximum 400 authored additions plus deletions per commit including task/progress evidence. Runtime harness: N/A for serialization-only checks; real temporary filesystem journal harness for the journal commit.
@@ -300,7 +300,7 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 ### Commit 2 — Serialization K2 and stability
 
 **Scope**: U4 tasks 4.10–4.12. This subsection records the exact previously observed DEF-1 RED, the D6 exempt-node implementation, explicit `Array.prototype.sort()` ordering, and byte-stability GREEN evidence.
-**Status**: implementation complete; staged for verification and commit after Commit 1 (`bcac27e`).
+**Status**: committed as `08c9ff2` (`fix(fs-beacon-store): preserve semantic keys with K2 serialization`), after Commit 1 (`bcac27e`).
 **Rollback boundary**: revert only the K2/stability delta and task checkboxes 4.10–4.12; retain Commit 1's K1 serialization.
 
 ### Commit 2 evidence
@@ -308,13 +308,13 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 **Historical RED preserved exactly**: the original U4b run against a temporary naive blanket converter failed 2 tests; `fooBar` and `__proto__` were missing, while `entryPoint` and `readinessIntent` were read back as `entry_point` and `readiness_intent`; projection K1 fields also remained snake_case. The original stability RED observed `identityRef`/`type` changing order when actor input insertion order changed. These are historical observations, not new RED claims.
 **GREEN verification**: `npx vitest run tests/adapters/fs-beacon-store/serialization.test.ts` → 1 file, 12 tests passed; `npm run lint` → exit 0 (pre-existing boundaries deprecation warnings); `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0. Final candidate hashes: serialization source `5bf2d261321b18557882a8a4ff789a242d6dfc62e9914dd558fd881f0993a997`; serialization test `33586fbb0331cc8e93f14c46e5270d8b2e644ae9a65f7322f089efc8214fd635`.
 **Files**: `src/adapters/fs-beacon-store/serialization.ts`, `tests/adapters/fs-beacon-store/serialization.test.ts`, `openspec/changes/fs-beacon-store/tasks.md`, this subsection.
-**Authored count**: staged diff from Commit 1 is measured across all changed files before commit and must remain ≤400; no code-golfing or semantic reduction is used.
+**Authored count**: 358 changed lines across all commit paths (225 additions, 133 deletions), within the 400-line limit; no code-golfing or semantic reduction was used.
 **Rollback boundary**: revert only the K2/stability delta and task checkboxes 4.10–4.12; retain Commit 1's K1 serialization.
 
 ### Commit 3 — Journal and final verification
 
 **Scope**: U4 tasks 4.13–4.20. Raw UTF-8 keyHash, six explicit inputHash builders, absent/replay/conflict journal outcomes, property coverage, and the exact final verification sequence.
-**Status**: implementation complete; staged for final verification and commit after Commit 2 (`08c9ff2`).
+**Status**: committed as `fa10bbd` (`feat(fs-beacon-store): add idempotency journal primitives`), after Commit 2 (`08c9ff2`).
 **Rollback boundary**: remove only the journal source/test and revert task checkboxes 4.13–4.20; retain the two serialization commits.
 
 ### Commit 3 evidence
@@ -322,6 +322,8 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 **Historical RED preserved exactly**: 4.13 originally failed with `Cannot find module '../../../src/adapters/fs-beacon-store/journal.js'` and `0 test` executed; 4.15's temporary nested-command probe failed with `TS2322` because `ApproveDraftCommand` lacked the required string index signature; 4.17's temporary lookup stub failed with `promise rejected "Error: lookup not implemented" instead of resolving`; and 4.19's temporary raw-content hash failed fast-check with shrunk counterexample `[{}]` because `excluded:changed` was included. These are historical observations, not new RED claims.
 **GREEN verification before commit**: `npx vitest run tests/adapters/fs-beacon-store/journal.test.ts` → 1 file, 4 tests passed; `npm run lint` → exit 0 (pre-existing boundaries deprecation warnings); `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0. The exact final 4.20 sequence is run again after Commit 3 as required.
 **Files**: `src/adapters/fs-beacon-store/journal.ts`, `tests/adapters/fs-beacon-store/journal.test.ts`, `openspec/changes/fs-beacon-store/tasks.md`, this subsection.
-**Authored count**: staged Commit 3 diff is measured across all changed files before commit and must remain ≤400; no code-golfing or semantic reduction is used.
+**Authored count**: 299 changed lines across all commit paths (289 additions, 10 deletions), within the 400-line limit; no code-golfing or semantic reduction was used.
 
-**Remaining implementation tasks**: none for U4b; tasks 4.8–4.20 are checked and parent-owned lifecycle actions remain deferred. No review, receipt, validation actor, or delivery gate is started by sdd-apply.
+**Final U4 verification**: focused suite 4 files / 26 tests passed; full suite 17 files / 176 tests passed; lint and typecheck exited 0; `git diff --check` passed; the tracked worktree was clean. All four serialization/journal source and test hashes matched the pre-split verified candidate exactly.
+
+**Remaining implementation tasks**: none for U4b; tasks 4.8–4.20 are checked. Parent-owned native settlement follows this artifact correction; no review, receipt, validation actor, or delivery gate was started by sdd-apply.
