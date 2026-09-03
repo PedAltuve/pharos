@@ -140,9 +140,16 @@ export async function lookupJournal(
   projectRoot: string,
   hash: string,
   requestedInputHash: string,
+  requestedKey: string,
 ): Promise<JournalLookup> {
   const entry = await readJournalEntry(projectRoot, hash);
   if (entry === undefined) return { outcome: "absent" };
+  if (
+    entry.key !== requestedKey
+    || entry.keyHash !== keyHash(entry.key)
+    || entry.keyHash !== keyHash(requestedKey)
+    || entry.keyHash !== hash
+  ) throw new Error("Corrupt journal entry");
   return entry.inputHash === requestedInputHash
     ? { outcome: "replay-hit", entry }
     : { outcome: "conflict", entry };

@@ -1,9 +1,10 @@
 import fc from "fast-check";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
+import { serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
 import type { Hasher } from "../../../src/domain/ports/hasher.js";
 import type { JsonValue } from "../../../src/domain/ports/json-value.js";
 import type { SemanticSource } from "../../../src/domain/semantics/types.js";
@@ -98,16 +99,45 @@ describe("idempotency journal", () => {
     };
     const writer = new FsAtomicWriter();
 
-    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash)).resolves.toEqual({
+    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash, entry.key)).resolves.toEqual({
       outcome: "absent",
     });
     await expect(createJournalEntry(projectRoot, entry, writer)).resolves.toBe("created");
-    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash)).resolves.toMatchObject({
+    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash, entry.key)).resolves.toMatchObject({
       outcome: "replay-hit",
     });
-    await expect(lookupJournal(projectRoot, entry.keyHash, "sha256:other")).resolves.toMatchObject({
+    await expect(lookupJournal(projectRoot, entry.keyHash, "sha256:other", entry.key)).resolves.toMatchObject({
       outcome: "conflict",
     });
+
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it("rejects contract-valid entries with mismatched key bindings", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "journal-test-"));
+    const requestedKey = "requested";
+    const entry = {
+      key: "other",
+      keyHash: keyHash("other"),
+      method: "updateDraft" as const,
+      beaconId: "bcn_1",
+      inputHash: "sha256:input",
+      result: { beaconId: "bcn_1", versionId: null, draftId: "draft_1", revision: 2 },
+    };
+    const entryPath = join(projectRoot, "journal", "idempotency", `${keyHash(requestedKey)}.json`);
+
+    await mkdir(join(projectRoot, "journal", "idempotency"), { recursive: true });
+    await writeFile(entryPath, serializeRecord("idempotency", entry));
+
+    await expect(lookupJournal(
+      projectRoot, keyHash(requestedKey), entry.inputHash, requestedKey,
+    )).rejects.toThrow("Corrupt");
+    await writeFile(entryPath, serializeRecord("idempotency", {
+      ...entry, key: requestedKey, keyHash: keyHash("other"),
+    }));
+    await expect(lookupJournal(
+      projectRoot, keyHash(requestedKey), entry.inputHash, requestedKey,
+    )).rejects.toThrow("Corrupt");
 
     await rm(projectRoot, { recursive: true, force: true });
   });
