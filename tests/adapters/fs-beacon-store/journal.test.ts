@@ -1,0 +1,123 @@
+import fc from "fast-check";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
+import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
+import type { Hasher } from "../../../src/domain/ports/hasher.js";
+import type { JsonValue } from "../../../src/domain/ports/json-value.js";
+import type { SemanticSource } from "../../../src/domain/semantics/types.js";
+import { describe, expect, it } from "vitest";
+import {
+  abandonDraftInput,
+  approveInput,
+  createDraftInput,
+  forkDraftInput,
+  createJournalEntry,
+  keyHash,
+  lookupJournal,
+  revokeVersionInput,
+  updateDraftInput,
+} from "../../../src/adapters/fs-beacon-store/journal.js";
+
+describe("idempotency journal", () => {
+  it("builds six SemanticValue inputs without nesting command interfaces", () => {
+    const content: SemanticSource = {
+      purpose: "p",
+      actor: { type: "user" },
+      entryPoint: { path: "/" },
+      actions: [],
+      readinessIntent: { sideEffectClass: "stateless" },
+    };
+    const hashes: JsonValue[] = [];
+    const hasher: Hasher = {
+      hash(value) {
+        hashes.push(value);
+        return "sha256:content";
+      },
+    };
+    const origin = {
+      branchedFromVersion: null,
+      branchedFromHash: null,
+      forkedFromDraft: null,
+    };
+
+    expect(approveInput("b", {
+      draftId: "d", reviewedHash: "h", versionId: "v", approvedAt: "t",
+      actor: null, staleOriginAcknowledged: true,
+    })).toHaveProperty("method", "approveDraft");
+    expect(createDraftInput("b", {
+      draftId: "d", label: "l", content, origin, beaconTitle: "title",
+    }, hasher)).toHaveProperty("contentHash", "sha256:content");
+    expect(updateDraftInput("b", { draftId: "d", expectedRevision: 1, content }, hasher))
+      .toHaveProperty("contentHash", "sha256:content");
+    expect(forkDraftInput("b", { sourceDraftId: "d", draftId: "d2", label: "l" }))
+      .toHaveProperty("method", "forkDraft");
+    expect(abandonDraftInput("b", { draftId: "d", reason: "r", abandonedAt: "t" }))
+      .toHaveProperty("method", "abandonDraft");
+    expect(revokeVersionInput("b", {
+      versionId: "v", reason: "r", actor: null, revokedAt: "t",
+    })).toHaveProperty("method", "revokeVersion");
+    expect(hashes).toHaveLength(2);
+  });
+
+  it("ignores project-excluded source fields when hashing update input", () => {
+    const base: SemanticSource = {
+      purpose: "p",
+      actor: { type: "user" },
+      entryPoint: { path: "/" },
+      actions: [],
+      readinessIntent: { sideEffectClass: "stateless" },
+    };
+    const hasher = new JcsSha256Hasher();
+
+    fc.assert(fc.property(
+      fc.dictionary(fc.stringMatching(/^excluded:[a-z]{1,4}$/), fc.jsonValue()),
+      (excluded) => {
+        const first: SemanticSource = { ...base, ...excluded };
+        const second: SemanticSource = {
+          ...first,
+          "excluded:changed": { nested: ["value"] },
+        };
+        expect(updateDraftInput("b", { draftId: "d", expectedRevision: 1, content: first }, hasher))
+          .toEqual(updateDraftInput("b", { draftId: "d", expectedRevision: 1, content: second }, hasher));
+      },
+    ));
+  });
+
+  it("creates, reads, and distinguishes absent, replay, and conflict entries", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "journal-test-"));
+    await mkdir(join(projectRoot, "journal", "idempotency"), { recursive: true });
+    const entry = {
+      key: "K",
+      keyHash: keyHash("K"),
+      method: "updateDraft" as const,
+      beaconId: "bcn_1",
+      inputHash: "sha256:input",
+      result: { beaconId: "bcn_1", versionId: null, draftId: "draft_1", revision: 2 },
+    };
+    const writer = new FsAtomicWriter();
+
+    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash)).resolves.toEqual({
+      outcome: "absent",
+    });
+    await expect(createJournalEntry(projectRoot, entry, writer)).resolves.toBe("created");
+    await expect(lookupJournal(projectRoot, entry.keyHash, entry.inputHash)).resolves.toMatchObject({
+      outcome: "replay-hit",
+    });
+    await expect(lookupJournal(projectRoot, entry.keyHash, "sha256:other")).resolves.toMatchObject({
+      outcome: "conflict",
+    });
+
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it("hashes the raw UTF-8 key bytes", () => {
+    expect(keyHash("abc")).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    expect(keyHash("abc")).not.toBe(
+      "8b5f48702995c159cd1c56c6e65c7f7a8d1c6b6f5e8f8f3f1b2e2d8b8e4f6c4",
+    );
+  });
+});

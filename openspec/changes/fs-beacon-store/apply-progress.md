@@ -314,7 +314,14 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 ### Commit 3 — Journal and final verification
 
 **Scope**: U4 tasks 4.13–4.20. Raw UTF-8 keyHash, six explicit inputHash builders, absent/replay/conflict journal outcomes, property coverage, and the exact final verification sequence.
-**Status**: deferred until Commit 2 is committed.
+**Status**: implementation complete; staged for final verification and commit after Commit 2 (`08c9ff2`).
 **Rollback boundary**: remove only the journal source/test and revert task checkboxes 4.13–4.20; retain the two serialization commits.
 
-**Remaining implementation tasks**: exact unchecked rows are tasks 4.13–4.20, all marked `<!-- sdd-owner: implementation -->`; parent-owned lifecycle actions remain deferred. No review, receipt, validation actor, or delivery gate is started by sdd-apply.
+### Commit 3 evidence
+
+**Historical RED preserved exactly**: 4.13 originally failed with `Cannot find module '../../../src/adapters/fs-beacon-store/journal.js'` and `0 test` executed; 4.15's temporary nested-command probe failed with `TS2322` because `ApproveDraftCommand` lacked the required string index signature; 4.17's temporary lookup stub failed with `promise rejected "Error: lookup not implemented" instead of resolving`; and 4.19's temporary raw-content hash failed fast-check with shrunk counterexample `[{}]` because `excluded:changed` was included. These are historical observations, not new RED claims.
+**GREEN verification before commit**: `npx vitest run tests/adapters/fs-beacon-store/journal.test.ts` → 1 file, 4 tests passed; `npm run lint` → exit 0 (pre-existing boundaries deprecation warnings); `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0. The exact final 4.20 sequence is run again after Commit 3 as required.
+**Files**: `src/adapters/fs-beacon-store/journal.ts`, `tests/adapters/fs-beacon-store/journal.test.ts`, `openspec/changes/fs-beacon-store/tasks.md`, this subsection.
+**Authored count**: staged Commit 3 diff is measured across all changed files before commit and must remain ≤400; no code-golfing or semantic reduction is used.
+
+**Remaining implementation tasks**: none for U4b; tasks 4.8–4.20 are checked and parent-owned lifecycle actions remain deferred. No review, receipt, validation actor, or delivery gate is started by sdd-apply.
