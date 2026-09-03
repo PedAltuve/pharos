@@ -80,6 +80,14 @@ export class ProjectLock {
       }
 
       const holder = await this.readHolder();
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= this.waitMs) {
+        return err({
+          rule: "lock-unavailable",
+          holderPid: holder.pid,
+          waitedMs: elapsedMs,
+        });
+      }
       if (holder.pid !== null && holder.hostname !== undefined) {
         if (holder.hostname !== hostname()) {
           const refusal = await this.waitUntilUnavailable(
@@ -91,30 +99,25 @@ export class ProjectLock {
           backoffMs = Math.min(backoffMs * 2, 250);
           continue;
         }
+        let holderIsAlive: boolean;
         try {
           process.kill(holder.pid, 0);
-          const refusal = await this.waitUntilUnavailable(
-            startedAt,
-            holder.pid,
-            backoffMs,
-          );
-          if (refusal) return refusal;
-          backoffMs = Math.min(backoffMs * 2, 250);
-          continue;
+          holderIsAlive = true;
         } catch (error) {
-          if (!isErrnoException(error) || error.code !== "ESRCH") {
-            const refusal = await this.waitUntilUnavailable(
-              startedAt,
-              holder.pid,
-              backoffMs,
-            );
-            if (refusal) return refusal;
-            backoffMs = Math.min(backoffMs * 2, 250);
-            continue;
-          }
+          holderIsAlive = !(isErrnoException(error) && error.code === "ESRCH");
+        }
+        if (!holderIsAlive) {
           await this.breakLock();
           continue;
         }
+        const refusal = await this.waitUntilUnavailable(
+          startedAt,
+          holder.pid,
+          backoffMs,
+        );
+        if (refusal) return refusal;
+        backoffMs = Math.min(backoffMs * 2, 250);
+        continue;
       }
 
       if (await this.isStale()) {

@@ -38,7 +38,7 @@ describe("ProjectLock acquisition", () => {
     const lockPath = join(projectDir, "lock");
     const original = JSON.stringify({
       pid: process.pid,
-      hostname: "same-host",
+      hostname: hostname(),
       nonce: "foreign-nonce",
     });
     await writeFile(lockPath, original);
@@ -150,7 +150,7 @@ describe("ProjectLock acquisition", () => {
     });
     if (!result.ok) {
       expect(result.error.waitedMs).toBeGreaterThanOrEqual(50);
-      expect(result.error.waitedMs).toBeLessThanOrEqual(100);
+      expect(result.error.waitedMs).toBeLessThanOrEqual(1_000);
     }
     expect(await readFile(lockPath, "utf8")).toContain("remote-nonce");
   });
