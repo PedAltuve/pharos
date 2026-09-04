@@ -7,9 +7,11 @@ import type { StoreCreateDraftCommand } from "../../../src/domain/ports/beacon-s
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
+import { BeaconStoreCorruptionError } from "../../../src/adapters/fs-beacon-store/corruption.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { keyHash } from "../../../src/adapters/fs-beacon-store/journal.js";
-import { serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
+import { applyPendingDraftReplays } from "../../../src/adapters/fs-beacon-store/reconcile.js";
+import { deserializeRecord, serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
 
 let projectDir: string;
@@ -241,6 +243,9 @@ describe("FsBeaconStore.updateDraft — revision-bound against persisted state (
       currentRevision: 1,
     });
     expect(await readFile(draftPath, "utf8")).toBe(beforeBytes);
+    // WARNING 5 — the non-bootstrap half: a refusal on an existing beacon
+    // must leave no journal entry either, not only an unchanged draft.json.
+    expect(await exists(join(projectDir, "journal", "idempotency", `${keyHash("update-key")}.json`))).toBe(false);
   });
 
   it("succeeds with a matching expectedRevision, incrementing the on-disk revision", async () => {
@@ -331,6 +336,112 @@ describe("FsBeaconStore.forkDraft — writes only the fork's draft.json", () => 
   });
 });
 
+describe("FsBeaconStore.updateDraft / forkDraft — invalid caller-supplied draft ids (D7, WARNING 1)", () => {
+  it("updateDraft refuses draft-not-found for an invalid draftId instead of throwing", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+
+    const result = await store.updateDraft(
+      "bcn_1",
+      { draftId: "bad id", expectedRevision: 1, content: content("x") },
+      "update-key",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-found", draftId: "bad id" },
+    });
+  });
+
+  it("forkDraft refuses draft-not-found for an invalid sourceDraftId instead of throwing", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+
+    const result = await store.forkDraft(
+      "bcn_1",
+      { sourceDraftId: "bad id", draftId: "draft_2", label: "Fork" },
+      "fork-key",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "draft-not-found", draftId: "bad id" },
+    });
+  });
+});
+
+describe("FsBeaconStore — a replay-hit journal entry must be bound to the requesting beacon (WARNING 2)", () => {
+  it("throws BeaconStoreCorruptionError instead of returning a foreign beacon's scan when the entry's beaconId does not match", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "shared-key");
+    const entryPath = join(projectDir, "journal", "idempotency", `${keyHash("shared-key")}.json`);
+    const entry = deserializeRecord("idempotency", await readFile(entryPath, "utf8")) as Record<string, unknown>;
+    await writeFile(entryPath, serializeRecord("idempotency", { ...entry, beaconId: "bcn_2" }));
+
+    await expect(store.createDraft("bcn_1", createCmd(), "shared-key")).rejects.toThrow(
+      BeaconStoreCorruptionError,
+    );
+  });
+});
+
+describe("reconcile.applyPendingDraftReplays — the other three guards (WARNING 3)", () => {
+  it("skips a tombstoned draft, a draft directory with no draft.json, a stamp-less draft, and a non-draft-window stamp", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+
+    // Guard 1 — tombstone present: draft.json still carries a stamp, but must be skipped.
+    const tombstonedDir = join(beaconDir, "drafts", "draft_tombstoned");
+    await mkdir(tombstonedDir, { recursive: true });
+    await writeFile(
+      join(tombstonedDir, "tombstone.json"),
+      serializeRecord("tombstone", {
+        draftId: "draft_tombstoned", label: "Gone", origin: noOrigin,
+        finalRevision: 1, finalHash: "sha256:x", reason: "r", abandonedAt: "2026-01-01T00:00:00Z",
+      }),
+    );
+    await writeFile(
+      join(tombstonedDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_tombstoned", label: "Gone", status: "open", revision: 1,
+        origin: noOrigin, content: content("p"),
+        idempotency: { key: "kt", keyHash: "kh-tombstoned", inputHash: "sha256:in", method: "createDraft" },
+      }),
+    );
+
+    // Guard 2 — draft directory present with no draft.json at all.
+    await mkdir(join(beaconDir, "drafts", "draft_empty"), { recursive: true });
+
+    // Guard 3a — draft.json present but carries no idempotency stamp.
+    const noStampDir = join(beaconDir, "drafts", "draft_no_stamp");
+    await mkdir(noStampDir, { recursive: true });
+    await writeFile(
+      join(noStampDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_no_stamp", label: "No stamp", status: "open", revision: 1,
+        origin: noOrigin, content: content("p"),
+      }),
+    );
+
+    // Guard 3b — stamp present but names a non-draft-window method.
+    const wrongMethodDir = join(beaconDir, "drafts", "draft_wrong_method");
+    await mkdir(wrongMethodDir, { recursive: true });
+    await writeFile(
+      join(wrongMethodDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_wrong_method", label: "Wrong method", status: "open", revision: 1,
+        origin: noOrigin, content: content("p"),
+        idempotency: { key: "kw", keyHash: "kh-wrong-method", inputHash: "sha256:in", method: "approveDraft" },
+      }),
+    );
+
+    await expect(
+      applyPendingDraftReplays(projectDir, "bcn_1", new FsAtomicWriter()),
+    ).resolves.toBeUndefined();
+
+    expect(await exists(join(projectDir, "journal", "idempotency", "kh-tombstoned.json"))).toBe(false);
+    expect(await exists(join(projectDir, "journal", "idempotency", "kh-wrong-method.json"))).toBe(false);
+  });
+});
+
 describe("D1e — the mutable-commit-point journal window (beacon-store-recovery R3)", () => {
   it("createDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
     const crashingStore = new FsBeaconStore({
@@ -345,6 +456,15 @@ describe("D1e — the mutable-commit-point journal window (beacon-store-recovery
     const retry = await store.createDraft("bcn_1", createCmd(), "K");
 
     expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("expected ok result");
+    // WARNING 4 — prove adoption, not a second draft or a wrong revision.
+    expect(Object.keys(retry.value.drafts)).toEqual(["draft_1"]);
+    expect(retry.value.drafts.draft_1).toMatchObject({ revision: 1, content: content("p") });
+    const journalEntry = deserializeRecord(
+      "idempotency",
+      await readFile(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`), "utf8"),
+    );
+    expect(journalEntry).toMatchObject({ keyHash: keyHash("K"), method: "createDraft" });
   });
 
   it("updateDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
@@ -368,6 +488,15 @@ describe("D1e — the mutable-commit-point journal window (beacon-store-recovery
     );
 
     expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("expected ok result");
+    // WARNING 4 — prove adoption, not a stale revision or a duplicate draft.
+    expect(Object.keys(retry.value.drafts)).toEqual(["draft_1"]);
+    expect(retry.value.drafts.draft_1).toMatchObject({ revision: 2, content: content("updated") });
+    const journalEntry = deserializeRecord(
+      "idempotency",
+      await readFile(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`), "utf8"),
+    );
+    expect(journalEntry).toMatchObject({ keyHash: keyHash("K"), method: "updateDraft" });
   });
 
   it("forkDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
@@ -391,6 +520,18 @@ describe("D1e — the mutable-commit-point journal window (beacon-store-recovery
     );
 
     expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("expected ok result");
+    // WARNING 4 — prove adoption: exactly the source plus one fork, at the
+    // fork's expected revision, not a duplicate fork or a stale revision.
+    expect(Object.keys(retry.value.drafts).sort()).toEqual(["draft_1", "draft_2"]);
+    expect(retry.value.drafts.draft_2).toMatchObject({
+      revision: 1, origin: { ...noOrigin, forkedFromDraft: "draft_1" },
+    });
+    const journalEntry = deserializeRecord(
+      "idempotency",
+      await readFile(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`), "utf8"),
+    );
+    expect(journalEntry).toMatchObject({ keyHash: keyHash("K"), method: "forkDraft" });
   });
 
   it("converges: a second createDraft retry after a successful replay performs no further action", async () => {

@@ -507,3 +507,48 @@ Corrected the U5 section header (previously "four stacked commits" with 5c-2's S
 **Rollback boundary**: remove `applyPendingDraftReplays`/`DraftIdempotencyStamp`/the `idempotency?` field from `reconcile.ts`; remove the three `applyPendingDraftReplays` call sites and the import from `fs-beacon-store.ts`; delete the 4 D1e tests and the `CrashBeforeWriter`/`crashesAtJournalWrite` helpers; revert checkboxes `6.11`–`6.14`. Commits 6a/6b and all earlier units are untouched.
 
 U6 is now complete: all of tasks `6.1`–`6.14` checked off in `tasks.md`, delivered as three stacked commits (6a, 6b, 6c) per the operator-ratified split. Native runtime attempt settlement for `U6-draft-write-paths` is reported in the apply-result envelope, not self-referenced here.
+
+---
+
+## Work Unit U6-advisory-remediation — RDD advisory findings on U6 (5 WARNINGs)
+
+**Scope**: `src/adapters/fs-beacon-store/fs-beacon-store.ts`, `tests/adapters/fs-beacon-store/draft-writes.test.ts`, this file. No domain, application, cli, other-adapter, or `package.json` change was needed. The 3 SUGGESTIONs (`R3-bootstrap-partial-write`, `R3-refusal-classification-gaps`, `R3-replay-blast-radius`) were left untouched per instructions.
+
+### WARNING 1 — `R3-unvalidated-draft-ids` (correctness)
+
+**Reachability analysis (recorded honestly)**: `updateDraft`'s `cmd.draftId` and `forkDraft`'s `cmd.sourceDraftId` were never validated by `classifyId` before this fix, but tracing every use showed neither ever reaches `layout.draftRecord`/`pathForId` while invalid. Both flow only into `getOwn(beacon.drafts, id)` (a pure `Object.hasOwn` lookup, D7-safe against prototype shadowing) before any disk write; an invalid id can never match a real (validated-at-creation) key, so the domain function itself already refuses `draft-not-found` first. A RED test for both (`updateDraft`/`forkDraft` with an invalid id, e.g. `"bad id"`) was written expecting exactly `{ rule: "draft-not-found", draftId: "bad id" }` and **passed unmodified against the pre-fix code** — a coverage confirmation, not a bug reproduction; recorded here rather than fabricated as a failure.
+**Fix (still applied, as directed)**: added explicit `classifyId(cmd.draftId, "existing")` / `classifyId(cmd.sourceDraftId, "existing")` checks at the same position as every other D7 guard in the file, both refusing `draft-not-found` (D7's row 2 — caller-supplied id addressing existing state → not-found refusal, never a throw). `draft-not-found` was chosen over inventing a new `BeaconStoreDiskRefusal` member because it is exactly the refusal the domain function already returns for a valid-but-absent id of the same kind — reusing it keeps `BeaconStoreDiskRefusal`'s closed union unwidened, the same reasoning already applied to `pathExists` in the U5 remediation. This closes the *structural* gap the review flagged (every other caller-supplied id in the file has an explicit D7 guard; these two didn't) and removes the dependency on the domain's lookup-miss as an implicit safety net, without changing observable behavior for any input — confirmed by the unchanged RED-turned-confirmation test staying green.
+
+### WARNING 2 — `R3-replay-hit-unguarded-scan` (correctness)
+
+**Root cause**: `JournalEntry.beaconId` is stored alongside `inputHash` in the same JSON file but is not cryptographically bound to it — nothing prevents the two fields from disagreeing on disk. `replayOrConflict`'s replay-hit branch trusted `inputHash` equality alone and re-scanned whatever beacon the *current* call requested, never checking it against the entry's own `beaconId`.
+**RED evidence**: wrote a test that performs a real `createDraft`, then tampers the persisted journal entry file (`deserializeRecord`/`serializeRecord` round-trip changing only `beaconId`), then repeats the same call. Before the fix this **resolved** `{ ok: true, value: <bcn_1's scan> }` instead of rejecting — observed directly (`AssertionError: promise resolved ... instead of rejecting`) — silently masking the on-disk inconsistency.
+**D3/D4 reasoning**: a mismatched `beaconId` on an otherwise-matching entry is not reachable through any legal call sequence (every `*Input` builder embeds `beaconId` in the hashed `SemanticValue`, so two different beacons can only produce colliding `inputHash`es via a SHA-256 collision) — it is definitionally an on-disk inconsistency. D4's unmodelled/impossible-state rule says throw, not invent a refusal; D3's closed `BeaconStoreDiskRefusal` union has no member for "the journal entry disagrees with itself," and manufacturing one would misclassify genuine corruption as an ordinary, retriable refusal. `BeaconStoreCorruptionError` was chosen (imported from `./corruption.js`) instead of a bare `Error`, consistent with every other corruption signal in this adapter.
+**GREEN evidence**: same test now passes — `rejects.toThrow(BeaconStoreCorruptionError)`.
+
+### WARNING 3 — `R3-replay-guards-untested` (coverage)
+
+Added one test driving `applyPendingDraftReplays` directly with four sibling draft fixtures under one beacon: a tombstoned draft (with a stamp that would otherwise replay), an empty draft directory with no `draft.json`, a `draft.json` with no `idempotency` field, and a `draft.json` whose stamp names `"approveDraft"` (not a draft-window method). Asserted the call resolves without throwing and that neither the tombstoned nor the wrong-method stamp's `keyHash` produced a journal entry. **This test passed unmodified against the pre-existing `reconcile.ts`** — the three guards were already correctly implemented; this closes a coverage gap only, no production change.
+
+### WARNING 4 — `R3-d1e-assertions-too-weak` (coverage)
+
+Strengthened all three D1e crash-retry tests (`createDraft`/`updateDraft`/`forkDraft`) beyond `expect(retry.ok).toBe(true)`: each now asserts the exact draft set present (`Object.keys(retry.value.drafts)`, ruling out a duplicate draft), the adopted draft's actual `revision`/`content`/`origin` (ruling out a stale revision), and that the journal entry now exists with the expected `keyHash` and `method` (`deserializeRecord` round-trip). **All three passed unmodified** — the D1e implementation from Commit 6c was already correct; this closes a coverage gap only, no production change.
+
+### WARNING 5 — `R3-refusal-side-effect-unproved` (coverage)
+
+Added one assertion to the existing non-bootstrap stale-`expectedRevision` `updateDraft` test: after the refusal, `journal/idempotency/<keyHash>.json` does not exist (the existing assertion already covered `draft.json` bytes being unchanged). **Passed unmodified** — `updateDraft` already returns before any write on a domain refusal (`if (!mutated.ok) return mutated;` precedes both `writeIntoDir` and `recordJournalEntry`); this closes the non-bootstrap half of the no-side-effect proof that Task 6.3's bootstrap case left open, no production change.
+
+### Call-site check
+
+`grep -n "applyPendingDraftReplays\|BeaconStoreCorruptionError" src/adapters/fs-beacon-store/fs-beacon-store.ts` shows `BeaconStoreCorruptionError` imported and thrown at exactly the new guard (line ~142), and `applyPendingDraftReplays` still wired at all three pre-existing call sites — nothing added here is orphaned.
+
+### Final verification (this commit's exact staged tree)
+
+- Focused: `npx vitest run tests/adapters/fs-beacon-store/draft-writes.test.ts` → `19 passed (19)` (13 baseline + 6 new/strengthened describe blocks covering the 5 warnings).
+- Full suite: `npx vitest run` → 20 files / 227 tests passed (up from 223 baseline).
+- `npx tsc --noEmit` → exit 0.
+- `npm run lint` → exit 0 (pre-existing `eslint-plugin-boundaries` deprecation warnings only).
+- `git diff --cached --numstat` (before this evidence addition): 25+0 `fs-beacon-store.ts`, 142+1 `draft-writes.test.ts` = 168 authored lines, well under the 350-line budget.
+
+**Files**: `src/adapters/fs-beacon-store/fs-beacon-store.ts` (D7 guards on `updateDraft`/`forkDraft`; `replayOrConflict` beaconId guard; `BeaconStoreCorruptionError` import), `tests/adapters/fs-beacon-store/draft-writes.test.ts` (2 new describe blocks for WARNING 1/3, 1 new describe block for WARNING 2, strengthened assertions in the 3 D1e tests and the stale-revision test for WARNING 4/5), `openspec/changes/fs-beacon-store/apply-progress.md` (this section).
+**Rollback boundary**: revert the two `classifyId` guards added to `updateDraft`/`forkDraft`, the `beaconId` mismatch guard and its throw in `replayOrConflict`, and the `BeaconStoreCorruptionError` import in `fs-beacon-store.ts`; revert `draft-writes.test.ts` to its Commit 6c state. All of U1–U6 (including the U5 external-review remediation) are untouched.

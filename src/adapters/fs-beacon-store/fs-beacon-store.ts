@@ -40,6 +40,7 @@ import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { getOwn } from "./records.js";
 import { applyPendingDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
+import { BeaconStoreCorruptionError } from "./corruption.js";
 import { serializeRecord } from "./serialization.js";
 
 export interface FsBeaconStoreOptions {
@@ -131,6 +132,17 @@ export class FsBeaconStore implements BeaconStore {
     const lookup = await lookupJournal(this.projectRoot, hash, requestedInputHash, key);
     if (lookup.outcome === "absent") return undefined;
     if (lookup.outcome === "replay-hit") {
+      // WARNING 2 — entry.beaconId is stored alongside inputHash, not bound
+      // to it cryptographically; a mismatch means this entry belongs to a
+      // different transaction than the one the requested beaconId names, an
+      // on-disk inconsistency no legal call sequence produces. Per D4's
+      // unmodelled/impossible-state throw rule, this is corruption, not a
+      // legitimate replay — never silently scan the requested beacon instead.
+      if (lookup.entry.beaconId !== beaconId) {
+        throw new BeaconStoreCorruptionError(
+          `Journal entry ${hash} is bound to beacon "${lookup.entry.beaconId}", not the requested beacon "${beaconId}"`,
+        );
+      }
       const scan = await scanBeacon(this.projectRoot, beaconId);
       return ok(scan.beacon);
     }
@@ -241,6 +253,14 @@ export class FsBeaconStore implements BeaconStore {
     if (classifyId(beaconId, "existing") !== "valid") {
       return err({ rule: "beacon-not-found", beaconId });
     }
+    // D7 — cmd.draftId also addresses existing state (WARNING 1). No valid
+    // draft can ever be keyed by an id that fails this check, so this is a
+    // draft-not-found refusal — the same shape the domain lookup itself
+    // returns for a valid-but-absent draftId — checked explicitly here so no
+    // caller-supplied id ever depends on an implicit lookup-miss for safety.
+    if (classifyId(cmd.draftId, "existing") !== "valid") {
+      return err({ rule: "draft-not-found", draftId: cmd.draftId });
+    }
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
@@ -292,6 +312,11 @@ export class FsBeaconStore implements BeaconStore {
     // forkDraft never bootstraps; only its new draftId is a creation id.
     if (classifyId(beaconId, "existing") !== "valid") {
       return err({ rule: "beacon-not-found", beaconId });
+    }
+    // D7 — sourceDraftId addresses existing state too (WARNING 1), same
+    // reasoning as updateDraft's draftId check above.
+    if (classifyId(cmd.sourceDraftId, "existing") !== "valid") {
+      return err({ rule: "draft-not-found", draftId: cmd.sourceDraftId });
     }
     if (classifyId(cmd.draftId, "creation") !== "valid") {
       return err({ rule: "invalid-id", field: "draftId", value: cmd.draftId });
