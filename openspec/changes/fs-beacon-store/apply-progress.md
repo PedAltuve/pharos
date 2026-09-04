@@ -332,7 +332,7 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 
 ## Work Unit U5 — Read paths, committed-chain walk, corruption (PR 5)
 
-**Status**: implementation complete. Tasks `5.1`–`5.17` are checked off in `tasks.md`, delivered as four stacked commits (5a `84fa2c7`, 5b `0e78b0b`, 5c-1 `ef2b3d9`, 5c-2) per the operator-ratified split.
+**Status**: implementation complete. Tasks `5.1`–`5.17` are checked off in `tasks.md`, delivered as five commits (5a `84fa2c7`, 5b `0e78b0b`, 5c-1 `ef2b3d9`, 5c-2 `efb6c4b`, plus the RDD bounded correction `576846d`) per the operator-ratified split and the subsequent reliability correction documented below. A sixth commit, the external-review remediation described in the "Work Unit U5-external-review-remediation" section further below, lands after `576846d` on the same branch.
 **Branch**: `change/fs-beacon-store-u5`, based on `master` at `d2b1ae5` (which already contains U1–U4, PRs #18/#19/#21/#22/#23/#24/#25, merged).
 **Mode**: Strict TDD.
 **Structured status consumed**: parent supplied the native runtime attempt authority (`gentle-ai sdd-attempt acquire` returned `state: proceed` against the parent's token, zero ledger mutation); this phase settles it. `artifactStore=openspec`; edit surfaces limited to `src/adapters/fs-beacon-store/**`, `tests/adapters/fs-beacon-store/**`, this change's OpenSpec files.
@@ -399,3 +399,62 @@ U5 is now complete: all of tasks `5.1`–`5.17` checked off in `tasks.md`, deliv
 **Authored diff**: `git diff --cached --numstat` immediately before commit — see the apply result for the exact total; measured at 180 lines across `reconcile.ts`, `read.test.ts`, `reconcile-walk.test.ts` before this evidence addition, under the 200-line correction budget.
 **Files**: `src/adapters/fs-beacon-store/reconcile.ts` (fixed), `tests/adapters/fs-beacon-store/reconcile-walk.test.ts` (+2 tests), `tests/adapters/fs-beacon-store/read.test.ts` (+2 tests), `openspec/changes/fs-beacon-store/apply-progress.md` (this section).
 **Rollback boundary**: revert this single commit; U5's prior four commits (5a `84fa2c7`, 5b `0e78b0b`, 5c-1, 5c-2) are untouched and remain green on their own.
+
+---
+
+## Work Unit U5-external-review-remediation — external review fixes (PR 5 follow-up)
+
+**Status**: implementation complete, one commit on `change/fs-beacon-store-u5` (HEAD `576846d` at start). This commit's own SHA is reported in the apply-phase return envelope rather than self-referenced here, since a commit cannot embed its own hash before it exists.
+**Branch**: `change/fs-beacon-store-u5`.
+**Mode**: Strict TDD.
+**Scope guard**: only `src/adapters/fs-beacon-store/**`, `tests/adapters/fs-beacon-store/**`, and this file were touched. No domain, application, cli, other-adapter, or `package.json` change was needed.
+
+### ROOT CAUSE 1 — wired D7's `classifyId` into every id path
+
+**RED evidence** (`tests/adapters/fs-beacon-store/read.test.ts`, run before the fix): `getBeacon("bad id")` and `getActiveVersion("bad id")` both threw the bare `Error: Invalid filesystem id: bad id` from `assertValidId`/`pathForId` instead of resolving to `{ ok: false, error: { rule: "beacon-not-found", ... } }`. A beacon directory literally named `bad id` on disk made `listBeacons()` reject with that same bare `Error` instead of `BeaconStoreCorruptionError`. A version directory named `bad version` under `versions/` made `scanVersions` reject with the bare `Error` too (`tests/adapters/fs-beacon-store/reconcile-walk.test.ts`).
+**Fix**: `fs-beacon-store.ts`'s `getBeacon`/`getActiveVersion` now call `classifyId(beaconId, "existing")` first and return the `beacon-not-found` refusal when it is not `"valid"`, before touching disk. `reconcile.ts`'s shared `listSorted` (versions/drafts) and `listBeaconIds` (beacons) now call `classifyId(name, "disk")` on every retained entry and throw `BeaconStoreCorruptionError` for anything that fails, closing the gap for beacon, version, and draft directory names alike.
+**GREEN evidence**: all four new tests pass; full `npx vitest run` unaffected elsewhere.
+
+### ROOT CAUSE 2 — closed the `listBeaconIds` ENOTDIR gap
+
+**RED evidence**: a stray non-directory file directly in `beacons/` (`.DS_Store`) made `listBeacons()` reject with a raw `Error { code: 'ENOTDIR', ... }` instead of `BeaconStoreCorruptionError`, because `listBeaconIds` still called `readdir` without `withFileTypes`.
+**Fix**: `listBeaconIds` now calls `readdir(layout.beacons(), { withFileTypes: true })`, exactly the treatment `listSorted` already had, and throws `BeaconStoreCorruptionError` for any non-`.tmp.` entry that is not a directory, before the D7 id check above runs.
+
+### DEFECT 3 — `pathExists` no longer swallows every error
+
+**RED evidence**: with `beacons/bcn_1` created as a *file* (not a directory), `store.getBeacon("bcn_1")` resolved to `{ ok: false, error: { rule: "beacon-not-found", beaconId: "bcn_1" } }` instead of surfacing the underlying `ENOTDIR` — the bare `catch` in `pathExists` mapped every error, not just `ENOENT`, to "not found".
+**Fix + D3/D4 reasoning**: `pathExists` now re-throws unless the caught error's `code` is `ENOENT`. Justification: `BeaconStoreDiskRefusal` (D3) is a *closed* union with no generic "unreadable"/"io-error" member — inventing one to carry `EACCES`/`EPERM`/other errno values would either misuse `beacon-not-found` (a lie: the beacon is present, just inaccessible) or require widening the closed union outside this remediation's scope. D4's existing "Unmodelled `errno` ... → throw" row already establishes that an errno with no modelled disk condition throws rather than being folded into an existing refusal; applying the same rule to reads (not just writes) is the narrowest fix consistent with D3/D4 as written.
+**GREEN evidence**: the new test asserts `getBeacon` rejects with an error matching `/ENOTDIR/` instead of resolving to a refusal.
+
+### DEFECT 4 — unknown draft status is corruption, not silently `closed`
+
+**RED evidence**: a `draft.json` with `status: "pending"` but otherwise carrying every field a `"closed"` draft needs (`approvedVersionId`, `closedAt`) was silently reconstructed with `status: "closed"` — `getBeacon` resolved `ok: true` with a beacon whose draft's status did not match what was on disk, no error at all.
+**Fix**: `scanDrafts` now checks `draft.status !== "closed"` (after the `"open"` branch) and throws `BeaconStoreCorruptionError` for anything else, per D1b's reconstruction rule being total over exactly `open | closed | abandoned`. `DraftFile.status` is retyped `string` (was the optimistic `"open" | "closed"`) since `unpick` copies it verbatim with no enum validation — the type now matches what is actually trusted from disk.
+**GREEN evidence**: the corrected test (carrying every "closed" field except a modelled status) now throws as expected.
+
+### DEFECT 5 — round-trip test now asserts full structural equality
+
+`tests/adapters/fs-beacon-store/read.test.ts`'s round-trip test was rewritten to build an explicit expected `Beacon` (every field of the version and all three reconstructed drafts) and assert `toEqual` against it, replacing the prior `toMatchObject`/key-list assertions. Observed: this test already passed against the pre-remediation implementation — `scanBeacon`/`scanVersions`/`scanDrafts` were already structurally correct; the defect was test coverage, not production behavior. No production code changed as a result of this defect.
+
+### DEFECT 6 — orphan classification asserted at the `reconcile.ts` scan level
+
+Added a test to `reconcile-walk.test.ts` that reproduces the crash precondition literally: `manifest.json` present, `semantics.json` present (a new `writeSemantics` helper), the version excluded from the committed set (via `supersedesVersion` pointing at the active root without being reachable), and no journal entry. Asserts directly on `scanVersions`'s `orphanVersionIds`, `versions[id]` being `undefined`, and `activeVersionId`. This test already passed against the pre-remediation `scanVersions` (the committed-chain walk already excluded it correctly); the defect was the missing assertion at the scan level with the full precondition, not a production bug. The pre-existing `read.test.ts` orphan-exclusion test (asserting through `FsBeaconStore`) is unchanged.
+
+### DEFECT 7 — added the two missing D4 corruption-boundary tests
+
+Added to `reconcile-walk.test.ts`: malformed JSON in `manifest.json` (`"{ this is not valid json"`), and a `contract` string with major version `2` (`"pharos.version-manifest/2"`). Both already throw `BeaconStoreCorruptionError` via `readRecord`'s existing catch-and-wrap around `deserializeRecord` (which throws on `JSON.parse` failure and on any contract-string mismatch, not only a major-version mismatch specifically) — both tests passed against the pre-remediation code. No production change was required; this closes a test-coverage gap D4's table declared but no test exercised.
+
+### DEFECT 8 — this section, and the corrected U5 header above
+
+Corrected the U5 section header (previously "four stacked commits" with 5c-2's SHA missing) to name all five prior commits, including the RDD correction `576846d`, and to point to this section for the sixth (remediation) commit.
+
+### Final verification (this commit's exact tree)
+
+- Focused: `npx vitest run tests/adapters/fs-beacon-store/` → 8 files / 76 tests passed (66 baseline + 10 new).
+- Full suite: `npx vitest run` → 19 files / 208 tests passed (198 baseline + 10 new).
+- `npx tsc --noEmit` → exit 0.
+- `npm run lint` → exit 0 (pre-existing `eslint-plugin-boundaries` deprecation warnings only, unrelated to this change).
+- `git diff --cached --numstat` (source + tests only, before this evidence addition): 24+3 `fs-beacon-store.ts`, 48+6 `reconcile.ts`, 144+9 `read.test.ts`, 71+0 `reconcile-walk.test.ts` = 305 authored lines, under the 400-line budget.
+
+**Files**: `src/adapters/fs-beacon-store/fs-beacon-store.ts` (fixed), `src/adapters/fs-beacon-store/reconcile.ts` (fixed), `tests/adapters/fs-beacon-store/read.test.ts` (+8 tests, 1 rewritten), `tests/adapters/fs-beacon-store/reconcile-walk.test.ts` (+3 tests), `openspec/changes/fs-beacon-store/apply-progress.md` (this section and the U5 header correction).
+**Rollback boundary**: revert this single commit; the five prior U5 commits (5a `84fa2c7`, 5b `0e78b0b`, 5c-1 `ef2b3d9`, 5c-2 `efb6c4b`, RDD correction `576846d`) are untouched and remain green on their own.

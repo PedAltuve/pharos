@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import type { Beacon, Draft, DraftOrigin, RevocationRecord, Version } from "../../domain/beacon/index.js";
 import type { SemanticSource } from "../../domain/semantics/index.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
-import { createLayout } from "./layout.js";
+import { classifyId, createLayout } from "./layout.js";
 import { deserializeRecord, type FileKind } from "./serialization.js";
 
 interface ManifestFile {
@@ -52,7 +52,9 @@ interface TombstoneFile {
 interface DraftFile {
   readonly draftId: string;
   readonly label: string;
-  readonly status: "open" | "closed";
+  // Untyped on disk — `unpick` copies this verbatim with no enum
+  // validation, so an unmodelled value must be checked at runtime (DEFECT 4).
+  readonly status: string;
   readonly revision: number;
   readonly origin: DraftOrigin;
   readonly content: SemanticSource;
@@ -78,6 +80,8 @@ function isMissing(error: unknown): boolean {
 // filter excludes interrupted writes and D2's leaked liveness probes.
 // A non-directory entry is not a declared D4 non-corruption row, so it
 // throws (D4 default) instead of silently masking a lost directory.
+// D7 — every remaining entry name is a disk-provenance id (ROOT CAUSE 1):
+// a segment failing validation is corrupt store state, never a bare throw.
 async function listSorted(path: string): Promise<string[]> {
   let entries: Dirent[];
   try {
@@ -93,6 +97,9 @@ async function listSorted(path: string): Promise<string[]> {
       throw new BeaconStoreCorruptionError(
         `Non-directory entry "${entry.name}" found in "${path}"`,
       );
+    }
+    if (classifyId(entry.name, "disk") !== "valid") {
+      throw new BeaconStoreCorruptionError(`Invalid id "${entry.name}" found in "${path}"`);
     }
     names.push(entry.name);
   }
@@ -301,6 +308,15 @@ async function scanDrafts(
       continue;
     }
 
+    // D1b's reconstruction rule is total over exactly "open" | "closed" |
+    // (tombstone-derived) "abandoned"; anything else is unmodelled disk
+    // state and must not be silently folded into "closed" (DEFECT 4).
+    if (draft.status !== "closed") {
+      throw new BeaconStoreCorruptionError(
+        `Draft "${draftId}" has an unmodelled status "${draft.status}"`,
+      );
+    }
+
     if (draft.approvedVersionId === undefined || draft.closedAt === undefined) {
       throw new BeaconStoreCorruptionError(
         `Closed draft "${draftId}" is missing approvedVersionId or closedAt`,
@@ -352,15 +368,41 @@ export async function scanBeacon(projectRoot: string, beaconId: string): Promise
   };
 }
 
-/** D8 — sorted, `.tmp.`-filtered listing of every beacon directory. */
+/**
+ * D8 — sorted, `.tmp.`-filtered listing of every beacon directory. Same
+ * treatment as `listSorted` (ROOT CAUSE 2): `withFileTypes` so a stray
+ * non-directory entry raises `BeaconStoreCorruptionError` instead of
+ * escaping as a raw `ENOTDIR` from a later read, and every disk-provenance
+ * id is validated per D7 (ROOT CAUSE 1) before it reaches a caller.
+ */
 export async function listBeaconIds(projectRoot: string): Promise<string[]> {
   const layout = createLayout(projectRoot);
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await readdir(layout.beacons());
+    entries = await readdir(layout.beacons(), { withFileTypes: true });
   } catch (error) {
     if (isMissing(error)) return [];
     throw error;
   }
-  return layout.listBeaconIds(entries);
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.includes(".tmp.")) continue;
+    if (!entry.isDirectory()) {
+      throw new BeaconStoreCorruptionError(
+        `Non-directory entry "${entry.name}" found in "${layout.beacons()}"`,
+      );
+    }
+    names.push(entry.name);
+  }
+
+  const beaconIds = layout.listBeaconIds(names);
+  for (const beaconId of beaconIds) {
+    if (classifyId(beaconId, "disk") !== "valid") {
+      throw new BeaconStoreCorruptionError(
+        `Invalid beacon id "${beaconId}" found in "${layout.beacons()}"`,
+      );
+    }
+  }
+  return beaconIds;
 }

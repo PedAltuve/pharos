@@ -20,7 +20,7 @@ import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
-import { createLayout } from "./layout.js";
+import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { listBeaconIds, scanBeacon } from "./reconcile.js";
 
@@ -31,12 +31,24 @@ export interface FsBeaconStoreOptions {
   readonly lock?: ProjectLock;
 }
 
+function isMissing(error: unknown): boolean {
+  return (
+    error instanceof Error
+    && "code" in error
+    && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+// D3 — only genuine absence maps to `beacon-not-found`. Any other I/O
+// condition (EACCES, EPERM, ENOTDIR, ...) has no refusal in D3's closed
+// union and must surface, per D4's unmodelled-errno throw rule.
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
   }
 }
 
@@ -54,6 +66,11 @@ export class FsBeaconStore implements BeaconStore {
   }
 
   async getBeacon(beaconId: string): Promise<Result<Beacon, BeaconStoreRefusal>> {
+    // D7 — a caller-supplied id addressing existing state fails validation
+    // by naming nothing: refuse beacon-not-found, never throw (ROOT CAUSE 1).
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
     const layout = createLayout(this.projectRoot);
     if (!(await pathExists(layout.beaconRecord(beaconId)))) {
       return err({ rule: "beacon-not-found", beaconId });
@@ -75,6 +92,10 @@ export class FsBeaconStore implements BeaconStore {
   async getActiveVersion(
     beaconId: string,
   ): Promise<Result<ActiveVersion | null, BeaconStoreRefusal>> {
+    // D7 — same caller-supplied/existing-state rule as getBeacon (ROOT CAUSE 1).
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
     const layout = createLayout(this.projectRoot);
     if (!(await pathExists(layout.beaconRecord(beaconId)))) {
       return err({ rule: "beacon-not-found", beaconId });

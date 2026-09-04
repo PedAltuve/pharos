@@ -72,6 +72,13 @@ async function writeActive(versionId: string | null): Promise<void> {
   );
 }
 
+async function writeSemantics(versionId: string): Promise<void> {
+  await writeFile(
+    join(beaconDir, "versions", versionId, "semantics.json"),
+    serializeRecord("semantics", { purpose: "orphan version semantics" }),
+  );
+}
+
 describe("reconcile.scanVersions — committed-chain walk", () => {
   it("excludes an orphan while including its committed sibling as superseded (D1's trace)", async () => {
     await writeVersion("ver_1", { approvedAt: "2026-01-01T00:00:00Z" });
@@ -220,6 +227,70 @@ describe("reconcile.scanVersions — committed-chain walk", () => {
       }),
     );
     await writeActive("ver_1");
+
+    await expect(scanVersions(projectDir, "bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+
+  it("classifies a version left by a crash before active.json as an orphan, with the full crash precondition (beacon-store-recovery R2 S1)", async () => {
+    await writeVersion("ver_1");
+    await writeActive("ver_1");
+    await writeVersion("ver_orphan", { supersedesVersion: "ver_1" });
+    await writeSemantics("ver_orphan");
+
+    const scan = await scanVersions(projectDir, "bcn_1");
+
+    expect(scan.orphanVersionIds).toEqual(["ver_orphan"]);
+    expect(scan.versions.ver_orphan).toBeUndefined();
+    expect(scan.activeVersionId).toBe("ver_1");
+  });
+
+  it("throws BeaconStoreCorruptionError for a version directory name failing id validation (D7 disk provenance, ROOT CAUSE 1)", async () => {
+    const versionDir = join(beaconDir, "versions", "bad version");
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(
+      join(versionDir, "manifest.json"),
+      serializeRecord("manifest", {
+        versionId: "bad version",
+        localNumber: 1,
+        approval: {
+          approvedAt: "2026-01-01T00:00:00Z",
+          reviewedHash: "sha256:hash",
+          staleOriginAcknowledged: false,
+          assurance: "operator_confirmed",
+          actor: null,
+        },
+        provenance: {
+          approvedDraftId: "draft_1",
+          approvedRevision: 1,
+          branchedFromVersion: null,
+          branchedFromHash: null,
+        },
+        supersedesVersion: null,
+        idempotency: { key: "k", keyHash: "kh", inputHash: "sha256:in", method: "approveDraft" },
+      }),
+    );
+    await writeActive("bad version");
+
+    await expect(scanVersions(projectDir, "bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+
+  it("throws BeaconStoreCorruptionError for malformed JSON in manifest.json (D4)", async () => {
+    const versionDir = join(beaconDir, "versions", "ver_bad_json");
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(join(versionDir, "manifest.json"), "{ this is not valid json");
+    await writeActive("ver_bad_json");
+
+    await expect(scanVersions(projectDir, "bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+
+  it("throws BeaconStoreCorruptionError for a manifest.json contract whose major version is not 1 (D4)", async () => {
+    const versionDir = join(beaconDir, "versions", "ver_bad_contract");
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(
+      join(versionDir, "manifest.json"),
+      JSON.stringify({ contract: "pharos.version-manifest/2", version_id: "ver_bad_contract" }),
+    );
+    await writeActive("ver_bad_contract");
 
     await expect(scanVersions(projectDir, "bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
   });
