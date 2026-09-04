@@ -39,7 +39,7 @@ import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { getOwn } from "./records.js";
-import { listBeaconIds, scanBeacon } from "./reconcile.js";
+import { applyPendingDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
 import { serializeRecord } from "./serialization.js";
 
 export interface FsBeaconStoreOptions {
@@ -122,9 +122,6 @@ export class FsBeaconStore implements BeaconStore {
     return ok(resolveActiveVersion(scan.beacon));
   }
 
-  // (1a) scan+apply pending replay is a documented no-op at this commit —
-  // D1e's draft-scoped replay rows are wired into `reconcile.ts`'s `apply`
-  // in a later U6 commit; nothing in this envelope depends on it yet.
   private async replayOrConflict(
     beaconId: string,
     key: IdempotencyKey,
@@ -186,6 +183,10 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
+      // (1a) D1e — complete a pending draft/journal window before this call
+      // is ever allowed to reach the domain function again.
+      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+
       const hash = keyHash(key);
       const requestedInputHash = inputHash(createDraftInput(beaconId, cmd, this.hasher), this.hasher);
       const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
@@ -244,6 +245,9 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
+      // (1a) D1e — same as createDraft's pre-lookup replay step.
+      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+
       const hash = keyHash(key);
       const requestedInputHash = inputHash(updateDraftInput(beaconId, cmd, this.hasher), this.hasher);
       const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
@@ -296,6 +300,9 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
+      // (1a) D1e — same as createDraft's pre-lookup replay step.
+      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+
       const hash = keyHash(key);
       const requestedInputHash = inputHash(forkDraftInput(beaconId, cmd), this.hasher);
       const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);

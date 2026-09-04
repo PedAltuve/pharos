@@ -8,6 +8,7 @@ import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
+import { keyHash } from "../../../src/adapters/fs-beacon-store/journal.js";
 import { serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
 
@@ -70,6 +71,33 @@ class OrderRecordingWriter implements AtomicWriter {
     this.calls.push(path);
     await this.inner.removeAtomic(path);
   }
+}
+
+/** Throws before delegating to a real FsAtomicWriter for any matching path. */
+class CrashBeforeWriter implements AtomicWriter {
+  readonly leakedTempPolicy = "sweep-on-recover" as const;
+  private readonly inner = new FsAtomicWriter();
+
+  constructor(private readonly shouldCrash: (path: string) => boolean) {}
+
+  async writeAtomic(path: string, bytes: string): Promise<void> {
+    if (this.shouldCrash(path)) throw new Error("InjectedCrash");
+    await this.inner.writeAtomic(path, bytes);
+  }
+
+  async createExclusive(path: string, bytes: string): Promise<"created" | "exists"> {
+    if (this.shouldCrash(path)) throw new Error("InjectedCrash");
+    return this.inner.createExclusive(path, bytes);
+  }
+
+  async removeAtomic(path: string): Promise<void> {
+    if (this.shouldCrash(path)) throw new Error("InjectedCrash");
+    await this.inner.removeAtomic(path);
+  }
+}
+
+function crashesAtJournalWrite(): CrashBeforeWriter {
+  return new CrashBeforeWriter((path) => path.includes(join("journal", "idempotency")));
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -300,5 +328,87 @@ describe("FsBeaconStore.forkDraft — writes only the fork's draft.json", () => 
       origin: { ...noOrigin, forkedFromDraft: "draft_closed" },
       content: content("closed-content"),
     });
+  });
+});
+
+describe("D1e — the mutable-commit-point journal window (beacon-store-recovery R3)", () => {
+  it("createDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir, hasher: new JcsSha256Hasher(), writer: crashesAtJournalWrite(),
+    });
+
+    await expect(crashingStore.createDraft("bcn_1", createCmd(), "K")).rejects.toThrow();
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "drafts", "draft_1", "draft.json"))).toBe(true);
+    expect(await exists(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`))).toBe(false);
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    const retry = await store.createDraft("bcn_1", createCmd(), "K");
+
+    expect(retry.ok).toBe(true);
+  });
+
+  it("updateDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir, hasher: new JcsSha256Hasher(), writer: crashesAtJournalWrite(),
+    });
+
+    await expect(crashingStore.updateDraft(
+      "bcn_1",
+      { draftId: "draft_1", expectedRevision: 1, content: content("updated") },
+      "K",
+    )).rejects.toThrow();
+    expect(await exists(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`))).toBe(false);
+
+    const retry = await store.updateDraft(
+      "bcn_1",
+      { draftId: "draft_1", expectedRevision: 1, content: content("updated") },
+      "K",
+    );
+
+    expect(retry.ok).toBe(true);
+  });
+
+  it("forkDraft: a same-key retry after a crash between draft.json and the journal entry adopts, raising neither stale-draft-revision nor duplicate-draft-id", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir, hasher: new JcsSha256Hasher(), writer: crashesAtJournalWrite(),
+    });
+
+    await expect(crashingStore.forkDraft(
+      "bcn_1",
+      { sourceDraftId: "draft_1", draftId: "draft_2", label: "Fork" },
+      "K",
+    )).rejects.toThrow();
+    expect(await exists(join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`))).toBe(false);
+
+    const retry = await store.forkDraft(
+      "bcn_1",
+      { sourceDraftId: "draft_1", draftId: "draft_2", label: "Fork" },
+      "K",
+    );
+
+    expect(retry.ok).toBe(true);
+  });
+
+  it("converges: a second createDraft retry after a successful replay performs no further action", async () => {
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir, hasher: new JcsSha256Hasher(), writer: crashesAtJournalWrite(),
+    });
+    await expect(crashingStore.createDraft("bcn_1", createCmd(), "K")).rejects.toThrow();
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    const firstRetry = await store.createDraft("bcn_1", createCmd(), "K");
+    expect(firstRetry.ok).toBe(true);
+
+    const journalEntryPath = join(projectDir, "journal", "idempotency", `${keyHash("K")}.json`);
+    const bytesAfterFirstRetry = await readFile(journalEntryPath, "utf8");
+
+    const secondRetry = await store.createDraft("bcn_1", createCmd(), "K");
+
+    expect(secondRetry).toEqual(firstRetry);
+    expect(await readFile(journalEntryPath, "utf8")).toBe(bytesAfterFirstRetry);
   });
 });

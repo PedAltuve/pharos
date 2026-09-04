@@ -1,8 +1,11 @@
 import type { Dirent } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import type { Beacon, Draft, DraftOrigin, RevocationRecord, Version } from "../../domain/beacon/index.js";
 import type { SemanticSource } from "../../domain/semantics/index.js";
+import type { AtomicWriter } from "./atomic-writer.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
+import { createJournalEntry, readJournalEntry } from "./journal.js";
+import type { JournalMethod } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { deserializeRecord, type FileKind } from "./serialization.js";
 
@@ -49,6 +52,15 @@ interface TombstoneFile {
   readonly abandonedAt: string;
 }
 
+// D1e's mutable-commit-point stamp. Untyped `method` on disk, same reasoning
+// as DraftFile's `status` (DEFECT 4) — checked at runtime before use.
+interface DraftIdempotencyStamp {
+  readonly key: string;
+  readonly keyHash: string;
+  readonly inputHash: string;
+  readonly method: string;
+}
+
 interface DraftFile {
   readonly draftId: string;
   readonly label: string;
@@ -60,6 +72,7 @@ interface DraftFile {
   readonly content: SemanticSource;
   readonly approvedVersionId?: string;
   readonly closedAt?: string;
+  readonly idempotency?: DraftIdempotencyStamp;
 }
 
 export interface VersionScan {
@@ -405,4 +418,55 @@ export async function listBeaconIds(projectRoot: string): Promise<string[]> {
     }
   }
   return beaconIds;
+}
+
+const DRAFT_WINDOW_METHODS: ReadonlySet<string> = new Set(["createDraft", "updateDraft", "forkDraft"]);
+
+function isDraftWindowMethod(value: string): value is JournalMethod {
+  return DRAFT_WINDOW_METHODS.has(value);
+}
+
+/**
+ * D1e — the mutable-commit-point journal window. For each draft under
+ * `beaconId` whose `draft.json` carries an idempotency stamp but whose
+ * journal entry is missing, writes the missing entry from the stamp alone
+ * (no stored snapshot, no re-execution). A tombstoned draft is D1b's
+ * abandonment window, not this one, and is skipped. MUST be called with the
+ * project lock already held (D5b) — this is step (1a) of the envelope.
+ */
+export async function applyPendingDraftReplays(
+  projectRoot: string,
+  beaconId: string,
+  writer: AtomicWriter,
+): Promise<void> {
+  const layout = createLayout(projectRoot);
+  const draftIds = await listSorted(layout.drafts(beaconId));
+
+  for (const draftId of draftIds) {
+    const tombstone = await readRecord<TombstoneFile>(layout.tombstone(beaconId, draftId), "tombstone");
+    if (tombstone !== undefined) continue;
+
+    const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
+    if (draft === undefined) continue;
+
+    const stamp = draft.idempotency;
+    if (stamp === undefined || !isDraftWindowMethod(stamp.method)) continue;
+
+    const existing = await readJournalEntry(projectRoot, stamp.keyHash);
+    if (existing !== undefined) continue;
+
+    await mkdir(layout.journalIdempotency(), { recursive: true });
+    await createJournalEntry(
+      projectRoot,
+      {
+        key: stamp.key,
+        keyHash: stamp.keyHash,
+        method: stamp.method,
+        beaconId,
+        inputHash: stamp.inputHash,
+        result: { beaconId, versionId: null, draftId, revision: draft.revision },
+      },
+      writer,
+    );
+  }
 }
