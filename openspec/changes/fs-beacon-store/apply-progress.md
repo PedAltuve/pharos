@@ -327,3 +327,24 @@ Later Phase 5–10 tasks remain unchecked and out of scope. Parent lifecycle act
 **Final U4 verification**: focused suite 4 files / 26 tests passed; full suite 17 files / 176 tests passed; lint and typecheck exited 0; `git diff --check` passed; the tracked worktree was clean. All four serialization/journal source and test hashes matched the pre-split verified candidate exactly.
 
 **Remaining implementation tasks**: none for U4b; tasks 4.8–4.20 are checked. Parent-owned native settlement follows this artifact correction; no review, receipt, validation actor, or delivery gate was started by sdd-apply.
+
+---
+
+## Work Unit U5 — Read paths, committed-chain walk, corruption (PR 5)
+
+**Status**: implementation complete. Tasks `5.1`–`5.17` are checked off in `tasks.md`, delivered as three stacked commits (5a, 5b, 5c) per the operator-ratified split.
+**Branch**: `change/fs-beacon-store-u5`, based on `master` at `d2b1ae5` (which already contains U1–U4, PRs #18/#19/#21/#22/#23/#24/#25, merged).
+**Mode**: Strict TDD.
+**Structured status consumed**: parent supplied the native runtime attempt authority (`gentle-ai sdd-attempt acquire` returned `state: proceed` against the parent's token, zero ledger mutation); this phase settles it. `artifactStore=openspec`; edit surfaces limited to `src/adapters/fs-beacon-store/**`, `tests/adapters/fs-beacon-store/**`, this change's OpenSpec files.
+
+### Commit 5a — corruption.ts, FsBeaconStore skeleton, beacon-not-found (U5 tasks 5.1–5.3, 5.16)
+
+**Scope**: `BeaconStoreCorruptionError`; `FsBeaconStore` constructor (`{ projectRoot, hasher, writer?, lock? }`, `writer` defaulting to `new FsAtomicWriter()`, `lock` defaulting to `new ProjectLock(projectRoot)`); `getBeacon` returning `beacon-not-found` on an absent `beacon.json`; stub bodies (throwing "not yet implemented") for the other 8 `BeaconStore` methods so the class satisfies the interface ahead of later units; `index.ts` now exports `FsBeaconStore`.
+**RED evidence**: `npx vitest run tests/adapters/fs-beacon-store/read.test.ts` failed before `fs-beacon-store.ts` existed — `Error: Cannot find module '.../fs-beacon-store.js'`, 0 tests executed.
+**GREEN evidence**: same command → `1 passed (1)` after implementing the constructor and `getBeacon`'s not-found branch.
+**Triangulation**: skipped for this task — 5.1's RED test is the single literal scenario `beacon-store-port` R3 S2 names for `getBeacon`'s not-found path; the existing-beacon branch is exercised in Commit 5c once `reconcile.ts` exists to satisfy it.
+**Full verification**: `npx tsc --noEmit` → exit 0; `npm run lint` → exit 0 (pre-existing `eslint-plugin-boundaries` deprecation warnings only); full `npx vitest run` → 18 files / 178 tests passed (up from 17/176 after U4).
+**Files**: `src/adapters/fs-beacon-store/corruption.ts` (created), `src/adapters/fs-beacon-store/fs-beacon-store.ts` (created), `src/adapters/fs-beacon-store/index.ts` (modified), `tests/adapters/fs-beacon-store/read.test.ts` (created), `openspec/changes/fs-beacon-store/tasks.md` (checkboxes 5.1–5.3, 5.16).
+**Authored diff**: 182 additions / 5 deletions across the five paths (`git diff --cached --stat`), under the 400-line budget.
+**Rollback boundary**: delete `src/adapters/fs-beacon-store/corruption.ts` and `src/adapters/fs-beacon-store/fs-beacon-store.ts`; revert `index.ts` to `export {};`; delete `tests/adapters/fs-beacon-store/read.test.ts`; revert only checkboxes `5.1`–`5.3`, `5.16`. U1–U4 history untouched.
+
