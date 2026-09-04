@@ -14,6 +14,7 @@ import type {
   StoreCreateDraftCommand,
 } from "../../domain/ports/beacon-store.js";
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
+import { resolveActiveVersion } from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
 import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
@@ -21,7 +22,7 @@ import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
 import { createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
-import { scanBeacon } from "./reconcile.js";
+import { listBeaconIds, scanBeacon } from "./reconcile.js";
 
 export interface FsBeaconStoreOptions {
   readonly projectRoot: string;
@@ -62,13 +63,24 @@ export class FsBeaconStore implements BeaconStore {
   }
 
   async listBeacons(): Promise<Result<readonly Beacon[], BeaconStoreRefusal>> {
-    throw new Error("listBeacons: not yet implemented");
+    const beaconIds = await listBeaconIds(this.projectRoot);
+    const beacons: Beacon[] = [];
+    for (const beaconId of beaconIds) {
+      const scan = await scanBeacon(this.projectRoot, beaconId);
+      beacons.push(scan.beacon);
+    }
+    return ok(beacons);
   }
 
   async getActiveVersion(
     beaconId: string,
   ): Promise<Result<ActiveVersion | null, BeaconStoreRefusal>> {
-    throw new Error(`getActiveVersion: not yet implemented for "${beaconId}"`);
+    const layout = createLayout(this.projectRoot);
+    if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    const scan = await scanBeacon(this.projectRoot, beaconId);
+    return ok(resolveActiveVersion(scan.beacon));
   }
 
   async createDraft(

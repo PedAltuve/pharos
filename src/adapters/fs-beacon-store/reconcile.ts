@@ -323,3 +323,16 @@ export async function scanBeacon(projectRoot: string, beaconId: string): Promise
     orphanVersionIds,
   };
 }
+
+/** D8 — sorted, `.tmp.`-filtered listing of every beacon directory. */
+export async function listBeaconIds(projectRoot: string): Promise<string[]> {
+  const layout = createLayout(projectRoot);
+  let entries: string[];
+  try {
+    entries = await readdir(layout.beacons());
+  } catch (error) {
+    if (isMissing(error)) return [];
+    throw error;
+  }
+  return layout.listBeaconIds(entries);
+}

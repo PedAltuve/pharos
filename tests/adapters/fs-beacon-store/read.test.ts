@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -167,6 +167,50 @@ describe("FsBeaconStore.getBeacon — Draft reconstruction (D1b)", () => {
   });
 });
 
+describe("FsBeaconStore.listBeacons / getActiveVersion", () => {
+  it("listBeacons sorts before semantic use and returns every beacon under beacons/", async () => {
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_zeta"), "bcn_zeta", "Zeta");
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_alpha"), "bcn_alpha", "Alpha");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    const result = await store.listBeacons();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+    expect(result.value.map((beacon) => beacon.beaconId)).toEqual(["bcn_alpha", "bcn_zeta"]);
+  });
+
+  it("getActiveVersion returns the derived-active version and refuses beacon-not-found", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    await writeManifest(beaconDir, "ver_1");
+    await writeActive(beaconDir, "ver_1");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const active = await store.getActiveVersion("bcn_1");
+    expect(active.ok).toBe(true);
+    if (!active.ok) throw new Error("expected ok result");
+    expect(active.value).toMatchObject({ versionId: "ver_1", status: "active" });
+
+    const missing = await store.getActiveVersion("bcn_absent");
+    expect(missing).toEqual({
+      ok: false,
+      error: { rule: "beacon-not-found", beaconId: "bcn_absent" },
+    });
+  });
+
+  it("getActiveVersion returns null when activeVersionId derives to null", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    const active = await store.getActiveVersion("bcn_1");
+
+    expect(active).toEqual({ ok: true, value: null });
+  });
+});
+
 describe("FsBeaconStore round-trip (fs-beacon-store R1 S1)", () => {
   it("reconstructs a Beacon with all three Draft variants and an active version identically", async () => {
     const beaconDir = join(projectDir, "beacons", "bcn_rt");
@@ -189,5 +233,44 @@ describe("FsBeaconStore round-trip (fs-beacon-store R1 S1)", () => {
     expect(Object.keys(result.value.drafts).sort()).toEqual([
       "draft_abandoned", "draft_closed", "draft_open",
     ]);
+  });
+});
+
+describe("FsBeaconStore — project.json is untouched (R1 S2 / D9)", () => {
+  it("leaves project.json byte-for-byte unchanged across all three read methods", async () => {
+    const projectJsonPath = join(projectDir, "project.json");
+    const originalBytes = '{"projectId":"proj_1"}';
+    await writeFile(projectJsonPath, originalBytes);
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_1"), "bcn_1", "Title");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.getBeacon("bcn_1");
+    await store.listBeacons();
+    await store.getActiveVersion("bcn_1");
+
+    expect(await readFile(projectJsonPath, "utf8")).toBe(originalBytes);
+  });
+});
+
+describe("FsBeaconStore — orphan classification (beacon-store-recovery R2 S1, read half)", () => {
+  it("excludes an orphan left by a crash before active.json from getBeacon and getActiveVersion", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    await writeManifest(beaconDir, "ver_1");
+    await writeActive(beaconDir, "ver_1");
+    await writeManifest(beaconDir, "ver_orphan", { supersedesVersion: "ver_1" });
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const beaconResult = await store.getBeacon("bcn_1");
+    expect(beaconResult.ok).toBe(true);
+    if (!beaconResult.ok) throw new Error("expected ok result");
+    expect(beaconResult.value.versions.ver_orphan).toBeUndefined();
+    expect(beaconResult.value.activeVersionId).toBe("ver_1");
+
+    const active = await store.getActiveVersion("bcn_1");
+    expect(active.ok).toBe(true);
+    if (!active.ok) throw new Error("expected ok result");
+    expect(active.value?.versionId).toBe("ver_1");
   });
 });
