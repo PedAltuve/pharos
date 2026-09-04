@@ -17,7 +17,9 @@ import type {
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
 import {
   createDraft as domainCreateDraft,
+  forkDraft as domainForkDraft,
   resolveActiveVersion,
+  updateDraft as domainUpdateDraft,
 } from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
 import { err, ok } from "../../shared/result.js";
@@ -27,9 +29,11 @@ import { FsAtomicWriter } from "./atomic-writer.js";
 import {
   createDraftInput,
   createJournalEntry,
+  forkDraftInput,
   inputHash,
   keyHash,
   lookupJournal,
+  updateDraftInput,
 } from "./journal.js";
 import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
@@ -232,10 +236,48 @@ export class FsBeaconStore implements BeaconStore {
     cmd: UpdateDraftCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("updateDraft: not yet implemented (lands in U6)");
+    // updateDraft never bootstraps — beaconId always addresses existing state.
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(updateDraftInput(beaconId, cmd, this.hasher), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+
+      const mutated = domainUpdateDraft(beacon, cmd);
+      if (!mutated.ok) return mutated;
+
+      const draft = getOwn(mutated.value.drafts, cmd.draftId);
+      if (draft === undefined || draft.status !== "open") {
+        throw new Error(`updateDraft invariant violated for draft "${cmd.draftId}"`);
+      }
+      await this.writeIntoDir(
+        layout.draftRecord(beaconId, cmd.draftId),
+        serializeRecord("draft", {
+          ...draft,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "updateDraft" },
+        }),
+      );
+
+      await this.recordJournalEntry(key, hash, "updateDraft", beaconId, requestedInputHash, {
+        beaconId, versionId: null, draftId: cmd.draftId, revision: draft.revision,
+      });
+
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 
   async forkDraft(
@@ -243,10 +285,51 @@ export class FsBeaconStore implements BeaconStore {
     cmd: ForkDraftCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("forkDraft: not yet implemented (lands in U6)");
+    // forkDraft never bootstraps; only its new draftId is a creation id.
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    if (classifyId(cmd.draftId, "creation") !== "valid") {
+      return err({ rule: "invalid-id", field: "draftId", value: cmd.draftId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(forkDraftInput(beaconId, cmd), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+
+      const mutated = domainForkDraft(beacon, cmd);
+      if (!mutated.ok) return mutated;
+
+      const draft = getOwn(mutated.value.drafts, cmd.draftId);
+      if (draft === undefined || draft.status !== "open") {
+        throw new Error(`forkDraft invariant violated for draft "${cmd.draftId}"`);
+      }
+      await this.writeIntoDir(
+        layout.draftRecord(beaconId, cmd.draftId),
+        serializeRecord("draft", {
+          ...draft,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "forkDraft" },
+        }),
+      );
+
+      await this.recordJournalEntry(key, hash, "forkDraft", beaconId, requestedInputHash, {
+        beaconId, versionId: null, draftId: cmd.draftId, revision: draft.revision,
+      });
+
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 
   async abandonDraft(

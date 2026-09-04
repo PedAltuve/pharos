@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
+import { serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
 
 let projectDir: string;
@@ -187,5 +188,117 @@ describe("FsBeaconStore.createDraft — GREEN confirmation of the pre-existing o
     const refused = await store.createDraft("bcn_x", createCmd({ draftId: ".." }), "k");
     expect(refused.ok).toBe(false);
     expect(await exists(join(projectDir, "beacons", "bcn_x"))).toBe(false);
+  });
+});
+
+describe("FsBeaconStore.updateDraft — revision-bound against persisted state (beacon-store-port R4 S1)", () => {
+  it("refuses a stale expectedRevision without mutation, leaving the persisted draft unchanged", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+    const draftPath = join(projectDir, "beacons", "bcn_1", "drafts", "draft_1", "draft.json");
+    const beforeBytes = await readFile(draftPath, "utf8");
+
+    const result = await store.updateDraft(
+      "bcn_1",
+      { draftId: "draft_1", expectedRevision: 0, content: content("stale") },
+      "update-key",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.error).toMatchObject({
+      rule: "stale-draft-revision",
+      draftId: "draft_1",
+      expectedRevision: 0,
+      currentRevision: 1,
+    });
+    expect(await readFile(draftPath, "utf8")).toBe(beforeBytes);
+  });
+
+  it("succeeds with a matching expectedRevision, incrementing the on-disk revision", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+
+    const result = await store.updateDraft(
+      "bcn_1",
+      { draftId: "draft_1", expectedRevision: 1, content: content("updated") },
+      "update-key",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+    expect(result.value.drafts.draft_1).toMatchObject({ revision: 2, content: content("updated") });
+  });
+
+  it("refuses beacon-not-found for an absent beacon", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const result = await store.updateDraft(
+      "bcn_absent",
+      { draftId: "draft_1", expectedRevision: 1, content: content("x") },
+      "update-key",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "beacon-not-found", beaconId: "bcn_absent" },
+    });
+  });
+});
+
+describe("FsBeaconStore.forkDraft — writes only the fork's draft.json", () => {
+  it("forks from an open source, preserving origin.forkedFromDraft", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+    await store.createDraft("bcn_1", createCmd(), "create-key");
+
+    const result = await store.forkDraft(
+      "bcn_1",
+      { sourceDraftId: "draft_1", draftId: "draft_2", label: "Fork" },
+      "fork-key",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+    expect(result.value.drafts.draft_2).toMatchObject({
+      status: "open",
+      label: "Fork",
+      origin: { ...noOrigin, forkedFromDraft: "draft_1" },
+      content: content("p"),
+    });
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "drafts", "draft_2", "draft.json"))).toBe(true);
+  });
+
+  it("forks from a closed source, preserving origin.forkedFromDraft and content", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await mkdir(beaconDir, { recursive: true });
+    await writeFile(
+      join(beaconDir, "beacon.json"),
+      serializeRecord("beacon", { beaconId: "bcn_1", title: "Title" }),
+    );
+    const closedDraftDir = join(beaconDir, "drafts", "draft_closed");
+    await mkdir(closedDraftDir, { recursive: true });
+    await writeFile(
+      join(closedDraftDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_closed", label: "Closed", status: "closed", revision: 2,
+        origin: noOrigin, content: content("closed-content"),
+        approvedVersionId: "ver_1", closedAt: "2026-01-04T00:00:00Z",
+      }),
+    );
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const result = await store.forkDraft(
+      "bcn_1",
+      { sourceDraftId: "draft_closed", draftId: "draft_fork", label: "From closed" },
+      "fork-key",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+    expect(result.value.drafts.draft_fork).toMatchObject({
+      status: "open",
+      origin: { ...noOrigin, forkedFromDraft: "draft_closed" },
+      content: content("closed-content"),
+    });
   });
 });
