@@ -15,12 +15,13 @@ import type {
 } from "../../domain/ports/beacon-store.js";
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
-import { err } from "../../shared/result.js";
+import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
 import { createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
+import { scanBeacon } from "./reconcile.js";
 
 export interface FsBeaconStoreOptions {
   readonly projectRoot: string;
@@ -56,8 +57,8 @@ export class FsBeaconStore implements BeaconStore {
     if (!(await pathExists(layout.beaconRecord(beaconId)))) {
       return err({ rule: "beacon-not-found", beaconId });
     }
-    // Reconstruction lands with reconcile.ts's scan (U5, tasks 5.9–5.10).
-    throw new Error(`getBeacon: reconstruction not yet implemented for "${beaconId}"`);
+    const scan = await scanBeacon(this.projectRoot, beaconId);
+    return ok(scan.beacon);
   }
 
   async listBeacons(): Promise<Result<readonly Beacon[], BeaconStoreRefusal>> {

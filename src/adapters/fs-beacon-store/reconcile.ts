@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
-import type { RevocationRecord, Version } from "../../domain/beacon/index.js";
+import type { Beacon, Draft, DraftOrigin, RevocationRecord, Version } from "../../domain/beacon/index.js";
+import type { SemanticSource } from "../../domain/semantics/index.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
 import { createLayout } from "./layout.js";
 import { deserializeRecord, type FileKind } from "./serialization.js";
@@ -30,6 +31,32 @@ interface RevocationFile {
 
 interface ActiveFile {
   readonly activeVersionId: string | null;
+}
+
+interface BeaconRecordFile {
+  readonly beaconId: string;
+  readonly title: string;
+}
+
+interface TombstoneFile {
+  readonly draftId: string;
+  readonly label: string;
+  readonly origin: DraftOrigin;
+  readonly finalRevision: number;
+  readonly finalHash: string;
+  readonly reason: string;
+  readonly abandonedAt: string;
+}
+
+interface DraftFile {
+  readonly draftId: string;
+  readonly label: string;
+  readonly status: "open" | "closed";
+  readonly revision: number;
+  readonly origin: DraftOrigin;
+  readonly content: SemanticSource;
+  readonly approvedVersionId?: string;
+  readonly closedAt?: string;
 }
 
 export interface VersionScan {
@@ -187,6 +214,112 @@ export async function scanVersions(projectRoot: string, beaconId: string): Promi
   return {
     versions: Object.fromEntries(committed),
     activeVersionId,
+    orphanVersionIds,
+  };
+}
+
+// D1b's total reconstruction rule: tombstone.json wins over draft.json
+// regardless of the latter's presence; draft.json alone reconstructs to
+// "open" or "closed" per its own status field.
+async function scanDrafts(
+  projectRoot: string,
+  beaconId: string,
+): Promise<Readonly<Record<string, Draft>>> {
+  const layout = createLayout(projectRoot);
+  const draftIds = await listSorted(layout.drafts(beaconId));
+  const drafts = new Map<string, Draft>();
+
+  for (const draftId of draftIds) {
+    const tombstone = await readRecord<TombstoneFile>(
+      layout.tombstone(beaconId, draftId),
+      "tombstone",
+    );
+    if (tombstone !== undefined) {
+      if (tombstone.draftId !== draftId) {
+        throw new BeaconStoreCorruptionError(
+          `Embedded draft id "${tombstone.draftId}" does not match directory "${draftId}"`,
+        );
+      }
+      drafts.set(draftId, {
+        status: "abandoned",
+        draftId: tombstone.draftId,
+        label: tombstone.label,
+        origin: tombstone.origin,
+        finalRevision: tombstone.finalRevision,
+        finalHash: tombstone.finalHash,
+        reason: tombstone.reason,
+        abandonedAt: tombstone.abandonedAt,
+      });
+      continue;
+    }
+
+    const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
+    if (draft === undefined) continue;
+    if (draft.draftId !== draftId) {
+      throw new BeaconStoreCorruptionError(
+        `Embedded draft id "${draft.draftId}" does not match directory "${draftId}"`,
+      );
+    }
+
+    if (draft.status === "open") {
+      drafts.set(draftId, {
+        status: "open",
+        draftId: draft.draftId,
+        label: draft.label,
+        revision: draft.revision,
+        origin: draft.origin,
+        content: draft.content,
+      });
+      continue;
+    }
+
+    if (draft.approvedVersionId === undefined || draft.closedAt === undefined) {
+      throw new BeaconStoreCorruptionError(
+        `Closed draft "${draftId}" is missing approvedVersionId or closedAt`,
+      );
+    }
+    drafts.set(draftId, {
+      status: "closed",
+      draftId: draft.draftId,
+      label: draft.label,
+      revision: draft.revision,
+      origin: draft.origin,
+      content: draft.content,
+      approvedVersionId: draft.approvedVersionId,
+      closedAt: draft.closedAt,
+    });
+  }
+
+  return Object.fromEntries(drafts);
+}
+
+export interface BeaconScan {
+  readonly beacon: Beacon;
+  readonly orphanVersionIds: readonly string[];
+}
+
+/** The full read-only reconstruction: beacon.json + the version and draft scans. */
+export async function scanBeacon(projectRoot: string, beaconId: string): Promise<BeaconScan> {
+  const layout = createLayout(projectRoot);
+  const beaconRecord = await readRecord<BeaconRecordFile>(layout.beaconRecord(beaconId), "beacon");
+  if (beaconRecord === undefined) {
+    throw new BeaconStoreCorruptionError(
+      `beacon.json missing for existing beacon directory "${beaconId}"`,
+    );
+  }
+  if (beaconRecord.beaconId !== beaconId) {
+    throw new BeaconStoreCorruptionError(
+      `Embedded beacon id "${beaconRecord.beaconId}" does not match directory "${beaconId}"`,
+    );
+  }
+
+  const [{ versions, activeVersionId, orphanVersionIds }, drafts] = await Promise.all([
+    scanVersions(projectRoot, beaconId),
+    scanDrafts(projectRoot, beaconId),
+  ]);
+
+  return {
+    beacon: { beaconId, title: beaconRecord.title, drafts, versions, activeVersionId },
     orphanVersionIds,
   };
 }
