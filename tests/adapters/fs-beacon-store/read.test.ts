@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DraftOrigin } from "../../../src/domain/beacon/index.js";
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
+import { BeaconStoreCorruptionError } from "../../../src/adapters/fs-beacon-store/corruption.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { serializeRecord } from "../../../src/adapters/fs-beacon-store/serialization.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
@@ -249,6 +250,36 @@ describe("FsBeaconStore — project.json is untouched (R1 S2 / D9)", () => {
     await store.getActiveVersion("bcn_1");
 
     expect(await readFile(projectJsonPath, "utf8")).toBe(originalBytes);
+  });
+});
+
+describe("FsBeaconStore — non-directory entries in versions/drafts listings (R3 finding 2)", () => {
+  it("rejects with BeaconStoreCorruptionError, never a raw ENOTDIR, for a stray file in versions/", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    await writeManifest(beaconDir, "ver_1");
+    await writeActive(beaconDir, "ver_1");
+    await mkdir(join(beaconDir, "versions"), { recursive: true });
+    await writeFile(join(beaconDir, "versions", ".DS_Store"), "stray");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    await expect(store.getBeacon("bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+    await expect(store.getActiveVersion("bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+    await expect(store.listBeacons()).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+
+  it("rejects with BeaconStoreCorruptionError, never a raw ENOTDIR, for a stray file in drafts/", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_2");
+    await writeBeaconRecord(beaconDir, "bcn_2", "Title");
+    await mkdir(join(beaconDir, "drafts"), { recursive: true });
+    await writeFile(join(beaconDir, "drafts", ".DS_Store"), "stray");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    await expect(store.getBeacon("bcn_2")).rejects.toThrow(BeaconStoreCorruptionError);
+    await expect(store.getActiveVersion("bcn_2")).rejects.toThrow(BeaconStoreCorruptionError);
+    await expect(store.listBeacons()).rejects.toThrow(BeaconStoreCorruptionError);
   });
 });
 

@@ -153,6 +153,47 @@ describe("reconcile.scanVersions — committed-chain walk", () => {
     await expect(scanVersions(projectDir, "bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
   });
 
+  it("derives the multi-root version as superseded regardless of root sort order (R3 finding 1)", async () => {
+    // Crash window: revoked root's chain reaches the active-named version
+    // (root AND walk-step). Order A: revoked id < active id — a naive
+    // last-write-wins walk processes the active root LAST and overwrites.
+    await writeVersion("ver_2_active");
+    await writeVersion("ver_1_revoked", {
+      supersedesVersion: "ver_2_active",
+      approvedAt: "2026-01-02T00:00:00Z",
+      localNumber: 2,
+    });
+    await writeRevocation("ver_1_revoked", "superseded");
+    await writeActive("ver_2_active");
+
+    const scanA = await scanVersions(projectDir, "bcn_1");
+
+    expect(scanA.versions.ver_1_revoked).toMatchObject({ status: "revoked" });
+    expect(scanA.versions.ver_2_active).toMatchObject({
+      status: "superseded",
+      supersededBy: "ver_1_revoked",
+    });
+    expect(scanA.activeVersionId).toBeNull();
+  });
+
+  it("derives the multi-root version as superseded when the active-named version sorts first (R3 finding 1)", async () => {
+    // Ordering B: active-named version sorts first — last-write-wins gets
+    // this by luck. Proves the fix is order-independent, not luck-dependent.
+    await writeVersion("ver_1_active");
+    await writeVersion("ver_2_revoked", { supersedesVersion: "ver_1_active", localNumber: 2 });
+    await writeRevocation("ver_2_revoked", "superseded");
+    await writeActive("ver_1_active");
+
+    const scanB = await scanVersions(projectDir, "bcn_1");
+
+    expect(scanB.versions.ver_2_revoked).toMatchObject({ status: "revoked" });
+    expect(scanB.versions.ver_1_active).toMatchObject({
+      status: "superseded",
+      supersededBy: "ver_2_revoked",
+    });
+    expect(scanB.activeVersionId).toBeNull();
+  });
+
   it("throws when an embedded version id does not match its directory name", async () => {
     const versionDir = join(beaconDir, "versions", "ver_1");
     await mkdir(versionDir, { recursive: true });

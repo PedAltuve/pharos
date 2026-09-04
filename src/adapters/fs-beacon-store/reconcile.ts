@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import type { Beacon, Draft, DraftOrigin, RevocationRecord, Version } from "../../domain/beacon/index.js";
 import type { SemanticSource } from "../../domain/semantics/index.js";
@@ -75,15 +76,27 @@ function isMissing(error: unknown): boolean {
 
 // D8 — every listing is sorted before any semantic use, and D8's `.tmp.`
 // filter excludes interrupted writes and D2's leaked liveness probes.
+// A non-directory entry is not a declared D4 non-corruption row, so it
+// throws (D4 default) instead of silently masking a lost directory.
 async function listSorted(path: string): Promise<string[]> {
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await readdir(path);
+    entries = await readdir(path, { withFileTypes: true });
   } catch (error) {
     if (isMissing(error)) return [];
     throw error;
   }
-  return entries.filter((entry) => !entry.includes(".tmp.")).sort();
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.includes(".tmp.")) continue;
+    if (!entry.isDirectory()) {
+      throw new BeaconStoreCorruptionError(
+        `Non-directory entry "${entry.name}" found in "${path}"`,
+      );
+    }
+    names.push(entry.name);
+  }
+  return names.sort();
 }
 
 async function readRecord<T>(path: string, kind: FileKind): Promise<T | undefined> {
@@ -142,44 +155,15 @@ export async function scanVersions(projectRoot: string, beaconId: string): Promi
   const roots = new Set<string>(revocations.keys());
   if (activeVersionRaw !== null) roots.add(activeVersionRaw);
 
-  const committed = new Map<string, Version>();
-
-  function statusOf(versionId: string, manifest: ManifestFile, successorId: string | null): Version {
-    const base = {
-      versionId: manifest.versionId,
-      localNumber: manifest.localNumber,
-      approval: manifest.approval,
-      provenance: manifest.provenance,
-    };
-    const revocation = revocations.get(versionId);
-    if (revocation !== undefined) {
-      return {
-        ...base,
-        status: "revoked",
-        previousStatus: revocation.previousStatus,
-        revocation: revocation.revocation,
-      };
-    }
-    if (successorId !== null) {
-      const successorManifest = manifests.get(successorId);
-      if (successorManifest === undefined) {
-        throw new BeaconStoreCorruptionError(
-          `Walk successor "${successorId}" for "${versionId}" has no manifest.json`,
-        );
-      }
-      return {
-        ...base,
-        status: "superseded",
-        supersededBy: successorId,
-        supersededAt: successorManifest.approval.approvedAt,
-      };
-    }
-    return { ...base, status: "active" };
-  }
+  // Pass 1 — collect committed ids and walk-step edges across ALL roots
+  // before deciding status; edges are only ever set, never cleared, so
+  // pass 2 is independent of root order (D1c's revocation crash window).
+  const committedIds = new Set<string>();
+  const supersededByEdge = new Map<string, { readonly by: string; readonly at: string }>();
 
   for (const root of [...roots].sort()) {
     const chainVisited = new Set<string>();
-    let successorId: string | null = null;
+    let predecessorId: string | null = null;
     let current: string | null = root;
 
     while (current !== null) {
@@ -197,11 +181,55 @@ export async function scanVersions(projectRoot: string, beaconId: string): Promi
         );
       }
 
-      committed.set(current, statusOf(current, manifest, successorId));
+      committedIds.add(current);
+      if (predecessorId !== null) {
+        const predecessorManifest = manifests.get(predecessorId)!;
+        supersededByEdge.set(current, {
+          by: predecessorId,
+          at: predecessorManifest.approval.approvedAt,
+        });
+      }
 
-      successorId = current;
+      predecessorId = current;
       current = manifest.supersedesVersion;
     }
+  }
+
+  // Pass 2 — D1's ratified 3-row table: revoked beats everything, a
+  // walk-step edge beats being a root, else active.
+  const committed = new Map<string, Version>();
+  for (const versionId of committedIds) {
+    const manifest = manifests.get(versionId)!;
+    const base = {
+      versionId: manifest.versionId,
+      localNumber: manifest.localNumber,
+      approval: manifest.approval,
+      provenance: manifest.provenance,
+    };
+
+    const revocation = revocations.get(versionId);
+    if (revocation !== undefined) {
+      committed.set(versionId, {
+        ...base,
+        status: "revoked",
+        previousStatus: revocation.previousStatus,
+        revocation: revocation.revocation,
+      });
+      continue;
+    }
+
+    const edge = supersededByEdge.get(versionId);
+    if (edge !== undefined) {
+      committed.set(versionId, {
+        ...base,
+        status: "superseded",
+        supersededBy: edge.by,
+        supersededAt: edge.at,
+      });
+      continue;
+    }
+
+    committed.set(versionId, { ...base, status: "active" });
   }
 
   const orphanVersionIds = [...manifests.keys()].filter((id) => !committed.has(id)).sort();
