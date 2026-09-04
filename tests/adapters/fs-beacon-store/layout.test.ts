@@ -68,6 +68,18 @@ describe("filesystem beacon-store layout", () => {
   it("rejects ids colliding with temporary-file filtering", () => {
     expect(isValidId("bcn_a.tmp.1")).toBe(false);
   });
+
+  it("agrees with the listing filter: any .tmp.-containing name is grammar-invalid too (R3 advisory finding 4)", () => {
+    // The listing filter (listBeaconIds / listSorted in reconcile.ts) drops
+    // any entry containing ".tmp." before it ever reaches classifyId. This
+    // pins that the two mechanisms cannot disagree: isValidId already
+    // rejects every such name on grammar grounds alone, so no legitimate id
+    // is ever silently dropped by the earlier substring filter.
+    for (const name of ["bcn_a.tmp.1", "a.tmp.b", ".tmp.leading", "trailing.tmp."]) {
+      expect(name.includes(".tmp.")).toBe(true);
+      expect(isValidId(name)).toBe(false);
+    }
+  });
 });
 
 describe("filesystem beacon-store id provenance", () => {

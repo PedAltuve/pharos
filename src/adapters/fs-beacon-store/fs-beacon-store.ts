@@ -99,9 +99,17 @@ export class FsBeaconStore implements BeaconStore {
   }
 
   async listBeacons(): Promise<Result<readonly Beacon[], BeaconStoreRefusal>> {
+    const layout = createLayout(this.projectRoot);
     const beaconIds = await listBeaconIds(this.projectRoot);
     const beacons: Beacon[] = [];
     for (const beaconId of beaconIds) {
+      // D10 — a beacon directory whose beacon.json was never committed is a
+      // pre-commit bootstrap artifact from writeIntoDir's mkdir-then-write
+      // crash window (I1: nothing is observable before the domain call
+      // returns ok), never a corrupt or listable beacon. Skipping it here
+      // keeps listBeacons in agreement with getBeacon's own not-found guard
+      // instead of scanBeacon raising BeaconStoreCorruptionError on it.
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) continue;
       const scan = await scanBeacon(this.projectRoot, beaconId);
       beacons.push(scan.beacon);
     }

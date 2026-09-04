@@ -412,6 +412,126 @@ describe("FsBeaconStore — pathExists surfaces non-ENOENT errors (DEFECT 3)", (
   });
 });
 
+describe("FsBeaconStore — crash-left empty beacon directory (R3 advisory finding 1, D10/I1)", () => {
+  it("getBeacon and listBeacons agree that a beacon.json-less directory is not a beacon yet", async () => {
+    // Reproduces writeIntoDir's crash window: mkdir(beacons/<id>) landed,
+    // the atomic write of beacon.json never did. D10 classifies this as a
+    // pre-commit bootstrap artifact, not a committed beacon (I1 — nothing
+    // is observable before the domain call returns ok).
+    await mkdir(join(projectDir, "beacons", "bcn_crash"), { recursive: true });
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_committed"), "bcn_committed", "Title");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const getResult = await store.getBeacon("bcn_crash");
+    expect(getResult).toEqual({
+      ok: false,
+      error: { rule: "beacon-not-found", beaconId: "bcn_crash" },
+    });
+
+    const listResult = await store.listBeacons();
+    expect(listResult.ok).toBe(true);
+    if (!listResult.ok) throw new Error("expected ok result");
+    expect(listResult.value.map((beacon) => beacon.beaconId)).toEqual(["bcn_committed"]);
+  });
+});
+
+describe("FsBeaconStore — reads never require the project lock (R4, R3 advisory finding 3)", () => {
+  it("getBeacon, listBeacons, and getActiveVersion succeed while another holder holds the lock", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    await writeManifest(beaconDir, "ver_1");
+    await writeActive(beaconDir, "ver_1");
+
+    // A remote-host holder never gets broken by acquire()'s liveness check,
+    // so any accidental lock.acquire() call on the read path would hang for
+    // the default 5s wait — the race below gives the assertion real teeth.
+    const lockPath = join(projectDir, "lock");
+    const holderBytes = JSON.stringify({
+      pid: process.pid,
+      hostname: "remote-host-not-us",
+      nonce: "held-by-someone-else",
+    });
+    await writeFile(lockPath, holderBytes);
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    async function withDeadline<T>(promise: Promise<T>): Promise<T> {
+      return Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("read path blocked on the project lock")), 300);
+        }),
+      ]);
+    }
+
+    const beacon = await withDeadline(store.getBeacon("bcn_1"));
+    const list = await withDeadline(store.listBeacons());
+    const active = await withDeadline(store.getActiveVersion("bcn_1"));
+
+    expect(beacon.ok).toBe(true);
+    expect(list.ok).toBe(true);
+    expect(active.ok).toBe(true);
+    expect(await readFile(lockPath, "utf8")).toBe(holderBytes);
+  });
+});
+
+describe("FsBeaconStore — scanDrafts corruption rows untested (R3 advisory finding 2)", () => {
+  it("throws BeaconStoreCorruptionError when an embedded draft id does not match its directory name", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    const draftDir = join(beaconDir, "drafts", "draft_1");
+    await mkdir(draftDir, { recursive: true });
+    await writeFile(
+      join(draftDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_other", label: "Open", status: "open", revision: 1, origin: noOrigin, content,
+      }),
+    );
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    await expect(store.getBeacon("bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+
+  it("throws BeaconStoreCorruptionError for a closed draft missing approvedVersionId and closedAt", async () => {
+    const beaconDir = join(projectDir, "beacons", "bcn_1");
+    await writeBeaconRecord(beaconDir, "bcn_1", "Title");
+    const draftDir = join(beaconDir, "drafts", "draft_1");
+    await mkdir(draftDir, { recursive: true });
+    await writeFile(
+      join(draftDir, "draft.json"),
+      serializeRecord("draft", {
+        draftId: "draft_1", label: "Closed", status: "closed", revision: 2, origin: noOrigin, content,
+      }),
+    );
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    await expect(store.getBeacon("bcn_1")).rejects.toThrow(BeaconStoreCorruptionError);
+  });
+});
+
+describe("FsBeaconStore — .tmp. substring filter agrees with isValidId's grammar (R3 advisory finding 4, D8)", () => {
+  it("silently excludes a .tmp.-named beacon directory instead of raising corruption, and any such name is always grammar-invalid", async () => {
+    // Pin the agreement the finding asked us to verify: isValidId already
+    // rejects every ".tmp."-containing id (layout.ts), so the substring
+    // pre-filter in listBeaconIds can never diverge from classifyId's own
+    // disk-provenance verdict — it only changes "throw" into "silently
+    // skip", which is D8's stated intent for interrupted-write artifacts.
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_1.tmp.leftover"), "bcn_1.tmp.leftover", "Leftover");
+    await writeBeaconRecord(join(projectDir, "beacons", "bcn_committed"), "bcn_committed", "Title");
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher: new JcsSha256Hasher() });
+
+    const result = await store.listBeacons();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+    expect(result.value.map((beacon) => beacon.beaconId)).toEqual(["bcn_committed"]);
+  });
+});
+
 describe("FsBeaconStore — unknown draft status is corruption (DEFECT 4 / D1b)", () => {
   it("throws BeaconStoreCorruptionError instead of silently reconstructing an unmodelled status as closed", async () => {
     const beaconDir = join(projectDir, "beacons", "bcn_1");
