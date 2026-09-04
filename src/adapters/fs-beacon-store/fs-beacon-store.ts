@@ -1,4 +1,5 @@
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import type {
   AbandonDraftCommand,
   ActiveVersion,
@@ -14,15 +15,28 @@ import type {
   StoreCreateDraftCommand,
 } from "../../domain/ports/beacon-store.js";
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
-import { resolveActiveVersion } from "../../domain/beacon/index.js";
+import {
+  createDraft as domainCreateDraft,
+  resolveActiveVersion,
+} from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
 import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
+import {
+  createDraftInput,
+  createJournalEntry,
+  inputHash,
+  keyHash,
+  lookupJournal,
+} from "./journal.js";
+import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
+import { getOwn } from "./records.js";
 import { listBeaconIds, scanBeacon } from "./reconcile.js";
+import { serializeRecord } from "./serialization.js";
 
 export interface FsBeaconStoreOptions {
   readonly projectRoot: string;
@@ -104,15 +118,113 @@ export class FsBeaconStore implements BeaconStore {
     return ok(resolveActiveVersion(scan.beacon));
   }
 
+  // (1a) scan+apply pending replay is a documented no-op at this commit —
+  // D1e's draft-scoped replay rows are wired into `reconcile.ts`'s `apply`
+  // in a later U6 commit; nothing in this envelope depends on it yet.
+  private async replayOrConflict(
+    beaconId: string,
+    key: IdempotencyKey,
+    hash: string,
+    requestedInputHash: string,
+  ): Promise<Result<Beacon, BeaconStoreRefusal> | undefined> {
+    const lookup = await lookupJournal(this.projectRoot, hash, requestedInputHash, key);
+    if (lookup.outcome === "absent") return undefined;
+    if (lookup.outcome === "replay-hit") {
+      const scan = await scanBeacon(this.projectRoot, beaconId);
+      return ok(scan.beacon);
+    }
+    return err({
+      rule: "idempotency-key-conflict",
+      key,
+      storedInputHash: lookup.entry.inputHash,
+      requestedInputHash,
+    });
+  }
+
+  // AtomicWriter writes into an already-existing parent directory (D5); the
+  // store owns creating new beacon/draft/version subdirectories.
+  private async writeIntoDir(path: string, bytes: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    await this.writer.writeAtomic(path, bytes);
+  }
+
+  private async recordJournalEntry(
+    key: string,
+    hash: string,
+    method: JournalMethod,
+    beaconId: string,
+    requestedInputHash: string,
+    result: JournalResult,
+  ): Promise<void> {
+    await mkdir(createLayout(this.projectRoot).journalIdempotency(), { recursive: true });
+    await createJournalEntry(
+      this.projectRoot,
+      { key, keyHash: hash, method, beaconId, inputHash: requestedInputHash, result },
+      this.writer,
+    );
+  }
+
   async createDraft(
     beaconId: string,
     cmd: StoreCreateDraftCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("createDraft: not yet implemented (lands in U6)");
+    // D7's creation-provenance special case — createDraft's beaconId may
+    // name a beacon that does not exist yet, so an invalid id here is
+    // never not-found, only invalid-id.
+    if (classifyId(beaconId, "creation") !== "valid") {
+      return err({ rule: "invalid-id", field: "beaconId", value: beaconId });
+    }
+    if (classifyId(cmd.draftId, "creation") !== "valid") {
+      return err({ rule: "invalid-id", field: "draftId", value: cmd.draftId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(createDraftInput(beaconId, cmd, this.hasher), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      const beaconExists = await pathExists(layout.beaconRecord(beaconId));
+      // D10 — an absent beacon is synthesized in memory only; nothing is
+      // written to disk until the domain call returns ok (I1).
+      const beacon: Beacon = beaconExists
+        ? (await scanBeacon(this.projectRoot, beaconId)).beacon
+        : { beaconId, title: cmd.beaconTitle, drafts: {}, versions: {}, activeVersionId: null };
+
+      const mutated = domainCreateDraft(beacon, cmd);
+      if (!mutated.ok) return mutated;
+
+      if (!beaconExists) {
+        await this.writeIntoDir(
+          layout.beaconRecord(beaconId),
+          serializeRecord("beacon", { beaconId, title: cmd.beaconTitle }),
+        );
+      }
+
+      const draft = getOwn(mutated.value.drafts, cmd.draftId);
+      if (draft === undefined || draft.status !== "open") {
+        throw new Error(`createDraft invariant violated for draft "${cmd.draftId}"`);
+      }
+      await this.writeIntoDir(
+        layout.draftRecord(beaconId, cmd.draftId),
+        serializeRecord("draft", {
+          ...draft,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "createDraft" },
+        }),
+      );
+
+      await this.recordJournalEntry(key, hash, "createDraft", beaconId, requestedInputHash, {
+        beaconId, versionId: null, draftId: cmd.draftId, revision: draft.revision,
+      });
+
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 
   async updateDraft(
