@@ -41,7 +41,7 @@ import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { getOwn } from "./records.js";
-import { applyPendingDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
+import { applyPendingProjectDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
 import { serializeRecord } from "./serialization.js";
 
@@ -205,9 +205,9 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
-      // (1a) D1e — complete a pending draft/journal window before this call
-      // is ever allowed to reach the domain function again.
-      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+      // (1a) D1b/D1e — the journal is project-global, so complete pending
+      // draft replays across every beacon before its lookup.
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
 
       const hash = keyHash(key);
       const requestedInputHash = inputHash(createDraftInput(beaconId, cmd, this.hasher), this.hasher);
@@ -275,8 +275,8 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
-      // (1a) D1e — same as createDraft's pre-lookup replay step.
-      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+      // (1a) D1b/D1e — same project-wide pre-lookup replay step.
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
 
       const hash = keyHash(key);
       const requestedInputHash = inputHash(updateDraftInput(beaconId, cmd, this.hasher), this.hasher);
@@ -335,8 +335,8 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
-      // (1a) D1e — same as createDraft's pre-lookup replay step.
-      await applyPendingDraftReplays(this.projectRoot, beaconId, this.writer);
+      // (1a) D1b/D1e — same project-wide pre-lookup replay step.
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
 
       const hash = keyHash(key);
       const requestedInputHash = inputHash(forkDraftInput(beaconId, cmd), this.hasher);
@@ -389,6 +389,10 @@ export class FsBeaconStore implements BeaconStore {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
     try {
+      // D1b/D1e — complete every pending committed draft mutation project-wide
+      // before the project-global journal lookup.
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
+
       const hash = keyHash(key);
       const requestedInputHash = inputHash(abandonDraftInput(beaconId, cmd), this.hasher);
       const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);

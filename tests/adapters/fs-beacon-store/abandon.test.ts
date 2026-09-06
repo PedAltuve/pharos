@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DraftOrigin } from "../../../src/domain/beacon/index.js";
 import { project } from "../../../src/domain/semantics/index.js";
-import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
+import type {
+  AtomicWriter,
+  WriteObserver,
+  WriteStage,
+} from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import {
@@ -88,6 +92,24 @@ class TombstoneExistsWriter extends RecordingWriter {
   }
 }
 
+class InjectedCrash extends Error {
+  constructor(stage: WriteStage, path: string) {
+    super(`InjectedCrash at ${stage} for ${path}`);
+  }
+}
+
+function crashAt(stage: WriteStage, matches: (path: string) => boolean): WriteObserver {
+  return {
+    onStage(observedStage, path) {
+      if (observedStage === stage && matches(path)) throw new InjectedCrash(stage, path);
+    },
+  };
+}
+
+function crashingStore(stage: WriteStage, matches: (path: string) => boolean): FsBeaconStore {
+  return store(new FsAtomicWriter({ observer: crashAt(stage, matches) }));
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -166,6 +188,175 @@ describe("FsBeaconStore.abandonDraft", () => {
         beaconId: "bcn_1",
         ownerId: cmd.draftId,
       },
+    });
+  });
+
+  it("replays tombstone cleanup and the original journal after a tombstone-before-removal crash", async () => {
+    const tombstone = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "tombstone.json");
+    const draft = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "draft.json");
+    const journal = join(projectDir, "journal", "idempotency", `${keyHash("abandon-key")}.json`);
+    const crashing = await seed(crashingStore("materialized", (path) => path === tombstone));
+
+    await expect(crashing.abandonDraft("bcn_1", cmd, "abandon-key")).rejects.toThrow(InjectedCrash);
+    const tombstoneBytes = await readFile(tombstone, "utf8");
+    expect(await exists(draft)).toBe(true);
+    expect(await exists(journal)).toBe(false);
+    expect(await exists(join(projectDir, "lock"))).toBe(false);
+
+    const retryWriter = new RecordingWriter();
+    const retry = store(retryWriter);
+    await expect(retry.abandonDraft("bcn_1", cmd, "abandon-key")).resolves.toMatchObject({
+      ok: true,
+      value: { drafts: { draft_1: { status: "abandoned" } } },
+    });
+    expect(await exists(draft)).toBe(false);
+    expect(await exists(journal)).toBe(true);
+    expect(await readFile(tombstone, "utf8")).toBe(tombstoneBytes);
+    expect(retryWriter.calls).toEqual([draft, journal]);
+
+    retryWriter.calls.length = 0;
+    await expect(retry.abandonDraft("bcn_1", cmd, "abandon-key")).resolves.toMatchObject({ ok: true });
+    expect(retryWriter.calls).toEqual([]);
+  });
+
+  it("writes only the original journal after a removal-before-journal crash, then converges", async () => {
+    const draft = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "draft.json");
+    const journal = join(projectDir, "journal", "idempotency", `${keyHash("abandon-key")}.json`);
+    const crashing = await seed(crashingStore(
+      "tmp-fsynced",
+      (path) => path.startsWith(`${journal}.tmp.`),
+    ));
+
+    await expect(crashing.abandonDraft("bcn_1", cmd, "abandon-key")).rejects.toThrow(InjectedCrash);
+    expect(await exists(draft)).toBe(false);
+    expect(await exists(journal)).toBe(false);
+    expect(await exists(join(projectDir, "lock"))).toBe(false);
+
+    const retryWriter = new RecordingWriter();
+    const retry = store(retryWriter);
+    await expect(retry.abandonDraft("bcn_1", cmd, "abandon-key")).resolves.toMatchObject({ ok: true });
+    expect(retryWriter.calls).toEqual([journal]);
+
+    retryWriter.calls.length = 0;
+    await expect(retry.abandonDraft("bcn_1", cmd, "abandon-key")).resolves.toMatchObject({ ok: true });
+    expect(retryWriter.calls).toEqual([]);
+  });
+
+  it("completes a pending abandonment before another draft mutation looks up its journal", async () => {
+    const abandonedDraft = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "draft.json");
+    const abandonedJournal = join(
+      projectDir,
+      "journal",
+      "idempotency",
+      `${keyHash("abandon-key")}.json`,
+    );
+    const crashing = await seed(crashingStore(
+      "materialized",
+      (path) => path.endsWith("tombstone.json"),
+    ));
+
+    await expect(crashing.abandonDraft("bcn_1", cmd, "abandon-key")).rejects.toThrow(InjectedCrash);
+
+    const retry = store();
+    await expect(retry.createDraft("bcn_1", {
+      draftId: "draft_2",
+      label: "Other",
+      beaconTitle: "Beacon",
+      origin,
+      content: source,
+    }, "create-other-key")).resolves.toMatchObject({
+      ok: true,
+      value: { drafts: { draft_1: { status: "abandoned" }, draft_2: { status: "open" } } },
+    });
+    expect(await exists(abandonedDraft)).toBe(false);
+    expect(await exists(abandonedJournal)).toBe(true);
+  });
+
+  it("completes the original cleanup before reporting a changed-input conflict", async () => {
+    const tombstone = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "tombstone.json");
+    const draft = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "draft.json");
+    const journal = join(projectDir, "journal", "idempotency", `${keyHash("abandon-key")}.json`);
+    const crashing = await seed(crashingStore("materialized", (path) => path === tombstone));
+
+    await expect(crashing.abandonDraft("bcn_1", cmd, "abandon-key")).rejects.toThrow(InjectedCrash);
+    const tombstoneBytes = await readFile(tombstone, "utf8");
+
+    const retryWriter = new RecordingWriter();
+    const retry = store(retryWriter);
+    await expect(retry.abandonDraft("bcn_1", { ...cmd, reason: "changed" }, "abandon-key"))
+      .resolves.toMatchObject({ ok: false, error: { rule: "idempotency-key-conflict" } });
+    expect(retryWriter.calls).toEqual([draft, journal]);
+    expect(await readFile(tombstone, "utf8")).toBe(tombstoneBytes);
+
+    retryWriter.calls.length = 0;
+    await expect(retry.abandonDraft("bcn_1", cmd, "fresh-key")).resolves.toEqual({
+      ok: false,
+      error: { rule: "draft-not-open", draftId: cmd.draftId, status: "abandoned" },
+    });
+    expect(retryWriter.calls).toEqual([]);
+  });
+
+  it("replays a crashed abandonment project-wide before another beacon can claim its key", async () => {
+    const tombstone = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "tombstone.json");
+    const draft = join(projectDir, "beacons", "bcn_1", "drafts", cmd.draftId, "draft.json");
+    const journal = join(projectDir, "journal", "idempotency", `${keyHash("abandon-key")}.json`);
+    const crashing = await seed(crashingStore("materialized", (path) => path === tombstone));
+
+    await expect(crashing.abandonDraft("bcn_1", cmd, "abandon-key")).rejects.toThrow(InjectedCrash);
+    const retry = store();
+    await expect(retry.createDraft("bcn_2", {
+      draftId: cmd.draftId,
+      label: "Other",
+      beaconTitle: "Other Beacon",
+      origin,
+      content: source,
+    }, "abandon-key")).resolves.toMatchObject({
+      ok: false,
+      error: { rule: "idempotency-key-conflict", key: "abandon-key" },
+    });
+    expect(await exists(draft)).toBe(false);
+    expect(deserializeRecord("idempotency", await readFile(journal, "utf8"))).toMatchObject({
+      beaconId: "bcn_1",
+      result: { draftId: cmd.draftId },
+    });
+    await expect(retry.abandonDraft("bcn_1", cmd, "abandon-key")).resolves.toMatchObject({ ok: true });
+    await expect(retry.getBeacon("bcn_2")).resolves.toMatchObject({
+      ok: false,
+      error: { rule: "beacon-not-found" },
+    });
+  });
+
+  it("replays a crashed create stamp before another beacon updates with its key", async () => {
+    const retry = store();
+    await expect(retry.createDraft("bcn_2", {
+      draftId: "draft_2",
+      label: "Other",
+      beaconTitle: "Other Beacon",
+      origin,
+      content: source,
+    }, "seed-key")).resolves.toMatchObject({ ok: true });
+
+    const journal = join(projectDir, "journal", "idempotency", `${keyHash("create-key")}.json`);
+    const crashing = crashingStore("tmp-fsynced", (path) => path.startsWith(`${journal}.tmp.`));
+    await expect(crashing.createDraft("bcn_1", {
+      draftId: cmd.draftId,
+      label: "Draft",
+      beaconTitle: "Beacon",
+      origin,
+      content: source,
+    }, "create-key")).rejects.toThrow(InjectedCrash);
+
+    await expect(retry.updateDraft("bcn_2", {
+      draftId: "draft_2",
+      expectedRevision: 1,
+      content: source,
+    }, "create-key")).resolves.toMatchObject({
+      ok: false,
+      error: { rule: "idempotency-key-conflict", key: "create-key" },
+    });
+    expect(deserializeRecord("idempotency", await readFile(journal, "utf8"))).toMatchObject({
+      beaconId: "bcn_1",
+      method: "createDraft",
     });
   });
 });

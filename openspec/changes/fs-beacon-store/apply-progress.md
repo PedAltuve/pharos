@@ -629,3 +629,71 @@ Added two pinning tests instead of changing code: a `layout.test.ts` unit test a
 - [ ] 7.8 Final verification: `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts`; `npm run lint`; `npx tsc --noEmit`; record the U7b authored count and stop for ask-on-risk before any overage. <!-- sdd-owner: implementation -->
 
 Parent lifecycle: settlement and any commit/review/delivery activity are deferred to the parent.
+
+---
+
+## Work Unit U7b — D1b abandonment crash replay (tasks 7.5–7.8)
+
+**Status**: complete; persisted checkboxes `7.5`–`7.8` are checked. Strict TDD mode.
+
+### Completed behavior
+- `applyPendingDraftReplays` treats a stamped tombstone as the recovery authority: with a missing journal, it removes a still-present `draft.json` and creates only the original journal entry; with no draft it creates the journal only; with a journal it does nothing.
+- Every draft mutation's existing pre-lookup replay call now completes pending abandonment work too; `abandonDraft` is wired into that ordering before its own lookup.
+- A same-key retry returns the recovered journal result; changed input completes the original cleanup/journal before returning `idempotency-key-conflict`; a fresh key returns `draft-not-open`. Tombstone bytes and existing journals are never replaced.
+
+### TDD Cycle Evidence
+| Tasks | Test file / layer | Safety net | RED | GREEN / triangulate / refactor |
+|---|---|---|---|---|
+| 7.5–7.6 | `abandon.test.ts` / real-filesystem integration | 3/3 focused tests passed | Added the two incomplete D1b windows plus changed-input retry; focused run was **3 failed, 3 passed**. Same-key retries returned refusals and changed input returned `draft-not-open`. The already-complete post-journal case was pre-existing and naturally passed; it is not claimed as RED. | Tombstone stamps now type their idempotency data and replay under the held lock before lookup. First GREEN run exposed an extra no-op `removeAtomic` call in the tombstone-only row; guarding removal on an existing draft produced **6/6**. |
+| 7.7 | `abandon.test.ts` / real-filesystem integration | Covered by the same genuine RED run above | The changed-input assertion was part of that RED run, before the D1b replay implementation; it failed with `draft-not-open`. | Passes after original cleanup/journal replay, with byte-identical tombstone. |
+| 7.5 triangulation | `abandon.test.ts` / real-filesystem integration | 6/6 focused tests passed | N/A — cross-mutation case triangulates the new generic helper behavior rather than claiming a redundant RED. | A `createDraft` after a tombstone crash completes the abandoned draft's replay before its own journal lookup; final focused run **7/7**. No refactor beyond the guarded cleanup. |
+
+### Verification
+- `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts` → **1 file, 7 tests passed**.
+- `npm test` → **21 files, 240 tests passed**.
+- `npm run lint` → exit 0; only pre-existing `eslint-plugin-boundaries` deprecation warnings.
+- `npm run typecheck` → exit 0.
+- `git diff --check` → exit 0.
+- Runtime harness: real `mkdtemp` projects and writer-owned `FsAtomicWriter` crash observers. The two interrupted windows explicitly prove lock release; retries prove repeat convergence.
+
+### Files / boundary / status
+- Changed: `src/adapters/fs-beacon-store/reconcile.ts`, `src/adapters/fs-beacon-store/fs-beacon-store.ts`, `tests/adapters/fs-beacon-store/abandon.test.ts`, persisted U7b task checkboxes, and this appended evidence.
+- No design deviation: tombstone precedence remains reconstruction authority; replay only removes mutable `draft.json` when present and uses exclusive journal creation.
+- Rollback boundary: remove U7b's tombstone branch in `applyPendingDraftReplays`, its pre-lookup call in `abandonDraft`, and the four crash/retry tests; revert only checkboxes `7.5`–`7.8` and this section. Preserve U7a and all U8+ work.
+- Delivery: stacked-to-main, PR 7b boundary only. U7b incremental authored count versus `/tmp/pharos-u7a-snapshot-og7w2o3w`: **221** (213 additions + 8 deletions across the five allowed files, including task/progress evidence); under the 400-line cap, so no ask-on-risk is needed.
+- Structured status consumed: `gentle-ai.sdd-status@2`, `applyState=ready`, `nextRecommended=apply`, `artifactStore=openspec`, repo-local `/home/pedro/pharos`, `actionContext.mode=repo-local`, allowed root `/home/pedro/pharos`. No action-context or edit-root warning.
+
+### Remaining tasks
+- Delegated U7b tasks: none.
+- U8+ remain intentionally unchecked and out of scope; no `recoverProject()` assembly, domain changes, or lifecycle actions were performed.
+
+Parent lifecycle: settlement and any commit/review/delivery activity are deferred to the parent.
+
+---
+
+## U7b corrective rerun — project-global pre-lookup replay
+
+**Status**: corrected and complete. The prior U7b completion claim is superseded by the confirmed cross-beacon failure and this corrective evidence. Persisted implementation checkboxes `7.6` and `7.8` were reset before correction and are checked again only after GREEN/final verification.
+
+### Completed work
+- Added a real-filesystem regression: A commits its tombstone under `abandon-key` and crashes before its journal; B's `createDraft` under that key now conflicts, A cleanup/journal converge, and A's same-key retry succeeds.
+- Added U6 triangulation: a crashed `createDraft` stamp on A is replayed before B's `updateDraft` can claim its key.
+- Added `applyPendingProjectDraftReplays`, which uses sorted, validated `listBeaconIds` and the existing per-beacon helper before the project-global journal lookup in `createDraft`, `updateDraft`, `forkDraft`, and `abandonDraft`.
+- Amended only D1b, D1e, and data-flow wording: O(all beacons/drafts), unrelated-corruption throw scope, and no repair policy for historical committed collisions are explicit.
+
+### TDD Cycle Evidence
+| Task | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| 7.6 corrective | `abandon.test.ts` / real-filesystem integration | 7/7 focused | **1 failed, 7 passed**: B `createDraft(K)` incorrectly returned `ok: true` after A's tombstone-before-journal crash. | 8/8 after project-level wrapper. | 9/9: crashed U6 create stamp blocks B `updateDraft(K)`. | Small shared wrapper; no further refactor needed. |
+| 7.8 | same | 9/9 focused | N/A — final verification task. | Focused/full/static commands passed. | Covered by the two independent cross-beacon entrypoints. | Clean. |
+
+### Verification
+- `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts` → 1 file, **9/9**.
+- `npm test` → 21 files, **242/242**.
+- Independent final verification reproduced 9/9 focused and 242/242 full tests; `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` exited 0 (existing lint deprecations only). The six authorized legacy ownership-marker normalizations preserve task text and states; all 136 checkbox markers now validate.
+
+### Boundary, status, and remaining work
+- Delivery boundary remains U7b / stacked-to-main; final incremental count versus the immutable U7a snapshot is 358 authored lines (334 additions + 24 deletions), including legacy marker normalization, under 400. U7a is 321; sequential sum is 679, net HEAD diff is 671. No commit, review, receipt, or delivery action was performed. Runtime settlement belongs to the parent; U8+ remains deferred.
+- Consumed authoritative `gentle-ai.sdd-status@2`: `applyState=ready`, `nextRecommended=apply`, OpenSpec repo-local `/home/pedro/pharos`, allowed root `/home/pedro/pharos`; no action-context warning. The status's `94/136` count is consistent after rechecking the two corrective task rows.
+- Remaining delegated U7b tasks: none. Exact remaining change tasks are persisted as unchecked U8+ lines in `tasks.md`; they are outside this authorized correction.
+- Rollback boundary: remove the project-level wrapper and four call-site substitutions, the two cross-beacon tests, this D1b/D1e/data-flow amendment, and this correction section; retain U7a and all U8+ work.
