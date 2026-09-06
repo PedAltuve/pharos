@@ -16,6 +16,7 @@ import type {
 } from "../../domain/ports/beacon-store.js";
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
 import {
+  abandonDraft as domainAbandonDraft,
   createDraft as domainCreateDraft,
   forkDraft as domainForkDraft,
   resolveActiveVersion,
@@ -27,6 +28,7 @@ import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
 import {
+  abandonDraftInput,
   createDraftInput,
   createJournalEntry,
   forkDraftInput,
@@ -377,10 +379,60 @@ export class FsBeaconStore implements BeaconStore {
     cmd: AbandonDraftCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("abandonDraft: not yet implemented (lands in U7)");
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    if (classifyId(cmd.draftId, "existing") !== "valid") {
+      return err({ rule: "draft-not-found", draftId: cmd.draftId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(abandonDraftInput(beaconId, cmd), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+      const mutated = domainAbandonDraft(beacon, cmd, this.hasher);
+      if (!mutated.ok) return mutated;
+
+      const draft = getOwn(mutated.value.drafts, cmd.draftId);
+      if (draft === undefined || draft.status !== "abandoned") {
+        throw new Error(`abandonDraft invariant violated for draft "${cmd.draftId}"`);
+      }
+      const tombstone = layout.tombstone(beaconId, cmd.draftId);
+      const created = await this.writer.createExclusive(
+        tombstone,
+        serializeRecord("tombstone", {
+          draftId: draft.draftId,
+          label: draft.label,
+          origin: draft.origin,
+          finalRevision: draft.finalRevision,
+          finalHash: draft.finalHash,
+          reason: draft.reason,
+          abandonedAt: draft.abandonedAt,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "abandonDraft" },
+        }),
+      );
+      if (created === "exists") {
+        return err({
+          rule: "immutable-file-exists", artifact: "tombstone", beaconId, ownerId: cmd.draftId,
+        });
+      }
+      await this.writer.removeAtomic(layout.draftRecord(beaconId, cmd.draftId));
+      await this.recordJournalEntry(key, hash, "abandonDraft", beaconId, requestedInputHash, {
+        beaconId, versionId: null, draftId: cmd.draftId, revision: draft.finalRevision,
+      });
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 
   async approveDraft(

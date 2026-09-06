@@ -8,14 +8,14 @@
 | Estimated authored lines (calibrated, this reconciliation) | **~3450–4530 total** — see per-unit table; computed the same way `beacon-core`'s own tasks.md computed its calibrated band (1.6–2.1x applied per unit, not to the total) |
 | 400-line budget risk | **High** — every one of the 10 units exceeds 400 lines once calibrated; four (U4, U5, U8, and U9 at its upper bound) exceed it even at the nominal midpoint |
 | Chained PRs recommended | **Yes** |
-| Suggested split | PR 1 (U1) → PR 2 (U2) → PR 3 (U3) → PR 4 (U4) → PR 5 (U5) → PR 6 (U6) → PR 7 (U7) → PR 8 (U8) → PR 9 (U9) → PR 10 (U10) — ten chained PRs in the design's dependency order |
+| Suggested split | PR 1 (U1) → PR 2 (U2) → PR 3 (U3) → PR 4 (U4) → PR 5 (U5) → PR 6 (U6) → PR 7a (U7a) → PR 7b (U7b) → PR 8 (U8) → PR 9 (U9) → PR 10 (U10) — stacked-to-main in dependency order |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | **pending** — the operator selects stacked-to-main, feature-branch-chain, or size-exception at the guard; this file presents the numbers and unit boundaries, not the decision. Units below are cut so either topology works unchanged. |
+| Chain strategy | **stacked-to-main (ratified)** — this selects topology only; per-slice size risk remains subject to the ask-on-risk guard. |
 
-Decision needed before apply: **Yes**
+Decision needed before apply: **No for chain topology; ask on any slice overage**
 Chained PRs recommended: **Yes**
-Chain strategy: **pending**
-400-line budget risk: **High**
+Chain strategy: **stacked-to-main (ratified)**
+400-line budget risk: **High — not discharged**
 
 **Honesty note, not an optimistic rounding.** `proposal.md` states "plan for ~2600–3200" as its calibrated ceiling. Reconciling that total bottom-up against the design's actual file surface (13 production files versus Slice C's 6, plus real filesystem I/O, crash injection, and a hand-rolled lock — none of which Slice C had) and applying the *same* 1.6–2.1x per-unit multiplier `beacon-core`'s own tasks.md used produces **3450–4530**, above the proposal's stated ceiling. Slice C's own calibrated estimates were themselves exceeded in practice (C2b: calibrated 570–585, landed 611). Presenting the higher number now, before `sdd-apply` starts, is the whole point of this forecast — an undershoot here costs the operator a mid-implementation stop.
 
@@ -31,7 +31,7 @@ Proposal's nominal band (1700–2600) is carried forward as the floor and distri
 | U4 — layout + serialization (K1/K2) + records + journal primitives | 250–380 | 315 | ~505–660 | **High** | Foundational infra every later unit depends on; K1/K2 exempt-node table (DEF-1 MAJOR) and D7's 3-outcome id validation both land here |
 | U5 — read paths + committed-chain walk + Draft/Version reconstruction | 215–330 | 275 | ~440–580 | **High** | D1's backward walk, D1b's 3-variant `Draft` reconstruction, D4's throw/no-throw table |
 | U6 — draft write paths (create/update/fork) + bootstrap | 165–255 | 210 | ~335–440 | Medium–High | D10 bootstrap ordering, D1e replay window |
-| U7 — abandonDraft + write-once immutability | 100–155 | 130 | ~210–275 | Medium | Smallest write-path unit; D1b's 3-step sequence is short |
+| U7 — abandonDraft + write-once immutability | 100–155 | 130 | ~210–275 | Medium | Parent forecast superseded for delivery by ratified U7a/U7b estimates below |
 | U8 — approval transaction (six steps) + D6b adoption | 235–355 | 295 | ~470–620 | **High** — design-flagged as highest risk | Six ordered steps, the D6b six-outcome adoption probe, R5's three crash scenarios |
 | U9 — revocation + recoverProject() two-phase reconcile | 165–255 | 210 | ~335–440 | Medium–High | D1c's 4-row crash table, D5b's two-phase scan/apply assembly, full `RecoverReport` |
 | U10 — shared port-contract suite + concurrency/determinism sweep | 150–230 | 190 | ~305–400 | Medium | Mostly tests; parameterised suite reused, concurrency ordering assertion |
@@ -58,8 +58,8 @@ Pre-agreed relief order (apply only if a unit's actual authored diff exceeds 400
 | U4 | `layout.ts` (paths + D7 id validation), `records.ts` (`getOwn`), `serialization.ts` (K1/K2 + contract envelope), `journal.ts` (`keyHash`, per-method `inputHash` builders, entry read/write, 3-outcome journal lookup) | PR 4 (base = PR 3 branch) | `npx vitest run tests/adapters/fs-beacon-store/{layout,records,serialization,journal}.test.ts` | Real temp dirs; golden-byte fixtures for serialization; adversarial directory-name fixtures for records | Delete `src/adapters/fs-beacon-store/{layout,records,serialization,journal}.ts` and their test files |
 | U5 | `getBeacon`/`listBeacons`/`getActiveVersion`; D1's committed-chain walk, status derivation, D1b's 3-variant `Draft` reconstruction; `corruption.ts` | PR 5 (base = PR 4 branch) | `npx vitest run tests/adapters/fs-beacon-store/{read,reconcile-walk}.test.ts` | Hand-built on-disk fixtures per D1/D1b classification row | Delete `src/adapters/fs-beacon-store/{fs-beacon-store,reconcile,corruption}.ts` (read-only surface) and their test files |
 | U6 | `createDraft` (incl. bootstrap), `updateDraft`, `forkDraft`; D1e replay window | PR 6 (base = PR 5 branch) | `npx vitest run tests/adapters/fs-beacon-store/draft-writes.test.ts` | Real temp dirs; crash injection at the draft.json↔journal-entry window | Revert the three method bodies in `fs-beacon-store.ts`; revert D1e rows added to `reconcile.ts` |
-| U7 | `abandonDraft`; write-once `tombstone.json` immutability | PR 7 (base = PR 6 branch) | `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts` | Real temp dirs; crash injection at tombstone↔draft-removal↔journal window | Revert `abandonDraft` in `fs-beacon-store.ts`; revert D1b rows in `reconcile.ts` |
-| U8 | `approveDraft`: six ordered steps, `active.json` commit point, D6b adoption probe | PR 8 (base = PR 7 branch) | `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` | Real temp dirs; `InjectedCrash` at each of the 3 named crash windows (R5 S1–S3) | Revert `approveDraft` in `fs-beacon-store.ts`; revert D1/D6b rows in `reconcile.ts`/`journal.ts` |
+| U7a/U7b | `abandonDraft`; tombstone immutability, then D1b crash replay | PR 7a (base = PR 6 branch) → PR 7b (base = PR 7a) | `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts` | Real temp dirs; U7b adds crash injection at tombstone↔draft-removal↔journal window | Revert `abandonDraft` in `fs-beacon-store.ts`; revert D1b rows in `reconcile.ts` |
+| U8 | `approveDraft`: six ordered steps, `active.json` commit point, D6b adoption probe | PR 8 (base = PR 7b branch) | `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` | Real temp dirs; `InjectedCrash` at each of the 3 named crash windows (R5 S1–S3) | Revert `approveDraft` in `fs-beacon-store.ts`; revert D1/D6b rows in `reconcile.ts`/`journal.ts` |
 | U9 | `revokeVersion`; `recoverProject()` two-phase scan/apply, full `RecoverReport` | PR 9 (base = PR 8 branch) | `npx vitest run tests/adapters/fs-beacon-store/{revocation,recover}.test.ts` | Real temp dirs; byte-and-inode snapshots before/after | Revert `revokeVersion` and `recoverProject()` in `fs-beacon-store.ts`; revert D1c rows and phase-2 `apply` in `reconcile.ts` |
 | U10 | `tests/contract/beacon-store/` shared suite instantiated for `FsBeaconStore`; concurrency + determinism sweep | PR 10 (base = PR 9 branch) | `npx vitest run tests/contract/beacon-store/ tests/adapters/fs-beacon-store/{concurrency,determinism}.test.ts` | Concurrent promises against one temp project; repeated round-trips with byte comparison | Delete `tests/contract/beacon-store/` and the two sweep test files |
 
@@ -175,18 +175,23 @@ Maps to: `beacon-store-port` R2 S1/S2 (replay/conflict — first wired mutating 
 - [x] 6.13 RED→GREEN: add the D1e convergence test — the replay only ever creates a missing journal entry, never rewrites one; a second call after replay performs no action (`beacon-store-recovery` R1 S2's convergence property, first exercised for this window). <!-- sdd-owner: implementation -->
 - [x] 6.14 Final verification: `npx vitest run tests/adapters/fs-beacon-store/draft-writes.test.ts`; `npm run lint`; `npx tsc --noEmit`. <!-- sdd-owner: implementation -->
 
-## Phase 7: U7 — abandonDraft + write-once immutability (PR 7)
+## Phase 7: U7a/U7b — abandonDraft (PRs 7a/7b)
 
-Maps to: `fs-beacon-store` R3 S2 (second write to `tombstone.json` is refused). Design D1b.
+Maps to: `fs-beacon-store` R3 S2 (fresh-key second abandonment preserves the tombstone). Design D1b. **Ratified split:** U7a covers normal abandonment, tombstone payload, post-completion replay/refusal behavior, and its tests (7.1–7.4), estimated **230–320** authored code, tests, and associated docs; U7b covers D1b crash replay and its tests (7.5–7.8), estimated **250–360**. Each is bounded to **≤400** authored lines; stop and ask on risk before an overage, without code-golfing.
 
-- [ ] 7.1 RED: create `tests/adapters/fs-beacon-store/abandon.test.ts` — `abandonDraft` on an `open` draft: `createExclusive drafts/<D>/tombstone.json` (commit point) → `removeAtomic drafts/<D>/draft.json` → journal entry; the tombstone carries `draft_id`, `label` (departure, ratified), `origin`, `final_revision`, `final_hash`, `reason`, `abandoned_at`, `idempotency`; confirm it fails (no `abandonDraft` yet). <!-- sdd-owner: implementation -->
-- [ ] 7.2 GREEN: implement `abandonDraft` on `FsBeaconStore` per D1b's write sequence. <!-- sdd-owner: implementation -->
-- [ ] 7.3 RED: extend the test file — a second `abandonDraft` attempt on an already-abandoned draft hits `EEXIST` on the tombstone `createExclusive` and returns `immutable-file-exists`, with the original `tombstone.json` bytes unchanged (`fs-beacon-store` R3 S2, literal); confirm it fails before the seam is wired into this method. <!-- sdd-owner: implementation -->
-- [ ] 7.4 GREEN: confirm 7.3 passes (the seam's `"exists"` return from `createExclusive`, mapped to `immutable-file-exists`). <!-- sdd-owner: implementation -->
-- [ ] 7.5 RED: extend the test file — D1b's 3-row crash table: (a) crash after tombstone, before `draft.json` removal → replay removes `draft.json` and writes the journal entry; (b) crash after removal, before journal → replay writes the journal entry only; (c) crash after journal → complete, no action; confirm each fails before the corresponding `RecoverAction` rows exist. <!-- sdd-owner: implementation -->
+### U7a — normal abandonment and completed retries
+
+- [x] 7.1 RED: create `tests/adapters/fs-beacon-store/abandon.test.ts` — `abandonDraft` on an `open` draft: `createExclusive drafts/<D>/tombstone.json` (commit point) → `removeAtomic drafts/<D>/draft.json` → journal entry; the tombstone carries `draft_id`, `label` (departure, ratified), `origin`, `final_revision`, `final_hash`, `reason`, `abandoned_at`, `idempotency`; confirm it fails (no `abandonDraft` yet). <!-- sdd-owner: implementation -->
+- [x] 7.2 GREEN: implement `abandonDraft` on `FsBeaconStore` per D1b's write sequence. <!-- sdd-owner: implementation -->
+- [x] 7.3 RED: extend the test file — after a completed abandonment, an identical same-key retry returns the journal result; the same key with changed logical input returns `idempotency-key-conflict`; and a fresh-key second abandonment returns the domain's `draft-not-open`, with original tombstone bytes unchanged. Separately, an actual seam `createExclusive` `EEXIST` maps to `immutable-file-exists` and preserves those bytes; confirm each fails before the envelope and seam mapping are wired. <!-- sdd-owner: implementation -->
+- [x] 7.4 GREEN: confirm 7.3 passes: a same-key journal hit returns before the domain call; an absent fresh key reaches the domain, whose `draft-not-open` refusal precedes any ordinary second tombstone write; and only an actual seam `"exists"` result maps to `immutable-file-exists`. <!-- sdd-owner: implementation -->
+
+### U7b — D1b crash replay
+
+- [ ] 7.5 RED: extend the test file — D1b's 3-row crash table: (a) crash after tombstone, before `draft.json` removal → same-key retry replays removal and journal completion before lookup, then returns the journal result; (b) crash after removal, before journal → replay writes the journal entry only, then returns that result; (c) crash after journal → complete, no action; confirm each fails before the corresponding `RecoverAction` rows exist. <!-- sdd-owner: implementation -->
 - [ ] 7.6 GREEN: extend `reconcile.ts` with D1b's classification rows and `apply` actions (`removed-abandoned-draft-file`, `wrote-journal-entry`), wired into step (1a) for `abandonDraft`. <!-- sdd-owner: implementation -->
-- [ ] 7.7 RED→GREEN: add a same-key-retry-after-crash test — the honest retry of an interrupted `abandonDraft` adopts (D1e's mechanism, reused here since `tombstone.json` also carries the stamp) rather than hitting a permanent `immutable-file-exists`. <!-- sdd-owner: implementation -->
-- [ ] 7.8 Final verification: `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts`; `npm run lint`; `npx tsc --noEmit`. <!-- sdd-owner: implementation -->
+- [ ] 7.7 RED→GREEN: add the changed-input crash-retry case — after a committed tombstone but before its journal entry, the same key with changed logical input completes cleanup and writes the original journal entry before lookup, then returns `idempotency-key-conflict`; tombstone bytes remain unchanged. <!-- sdd-owner: implementation -->
+- [ ] 7.8 Final verification: `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts`; `npm run lint`; `npx tsc --noEmit`; record the U7b authored count and stop for ask-on-risk before any overage. <!-- sdd-owner: implementation -->
 
 ## Phase 8: U8 — Approval transaction: six steps + D6b adoption (PR 8, highest risk)
 
@@ -250,4 +255,4 @@ Maps to: every `beacon-store-port` requirement, reasserted generically; `fs-beac
 
 ## Delivery boundary
 
-Delivery actions (commit, push, PR creation, and lifecycle gates) remain outside SDD implementation task completion. No review actor or post-apply lifecycle task is included because receipt-driven development is opt-in and currently disabled. Chain strategy (stacked-to-main vs. feature-branch-chain) and any `size:exception` are decided at the `ask-on-risk` guard before `sdd-apply` begins.
+Delivery actions (commit, push, PR creation, and lifecycle gates) remain outside SDD implementation task completion. No review actor or post-apply lifecycle task is included because receipt-driven development is opt-in and currently disabled. Stacked-to-main is ratified; `ask-on-risk` remains required for any slice that would exceed its 400-line budget or need a `size:exception`.

@@ -592,3 +592,40 @@ Added two pinning tests instead of changing code: a `layout.test.ts` unit test a
 
 **Files**: `src/adapters/fs-beacon-store/fs-beacon-store.ts` (`listBeacons` gains the `pathExists(layout.beaconRecord(beaconId))` guard, Finding 1 only), `tests/adapters/fs-beacon-store/read.test.ts` (5 new describe blocks: Finding 1 RED→GREEN, Finding 3 lock-free proof, Finding 2's two coverage confirmations, Finding 4's coverage confirmation), `tests/adapters/fs-beacon-store/layout.test.ts` (1 new test pinning Finding 4's grammar agreement), `openspec/changes/fs-beacon-store/apply-progress.md` (this section).
 **Rollback boundary**: revert the `pathExists` guard added to `listBeacons` in `fs-beacon-store.ts`; revert the 5 new describe blocks in `read.test.ts` and the 1 new test in `layout.test.ts`. All of U1–U6 and the U5/U6 prior remediations are untouched.
+
+---
+
+## Work Unit U7a — normal abandonment and completed retries (tasks 7.1–7.4)
+
+**Status**: complete; persisted checkboxes `7.1`–`7.4` are checked. U7b and all later work remain deferred. Strict TDD mode.
+
+### Completed behavior
+- `abandonDraft` locks, checks the journal, calls the unchanged domain function, then creates the immutable tombstone, removes `draft.json`, and creates the journal entry.
+- Tombstone payload contains the ratified `label` extension plus final revision/hash, reason, timestamp, origin, and idempotency stamp.
+- Completed same-key calls replay; changed logical input conflicts; a fresh key reaches the reconstructed `abandoned` draft and returns `draft-not-open` without writing. An injected writer `"exists"` response maps to `immutable-file-exists` only as the seam case.
+
+### TDD Cycle Evidence
+| Tasks | RED | GREEN / TRIANGULATE / REFACTOR |
+|---|---|---|
+| 7.1–7.2 | New real-temp-dir test file failed: `3 failed`, each with `abandonDraft: not yet implemented (lands in U7)`. | Implemented the D1b normal sequence; focused run passed `3 passed (3)`. Sequence/payload case exercises all three ordered writes. |
+| 7.3–7.4 | The same RED run covered replay, conflict, fresh-key domain-first refusal, and injected seam-exists mapping against the stub. | Completed-retry case triangulates identical, changed, and fresh keys; no refactor was needed after lint/typecheck. |
+
+### Verification
+- Baseline: `npm test` → **20 files, 233 tests passed**.
+- Focused: `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts` → **1 file, 3 tests passed**.
+- `npx tsc --noEmit` → exit 0; `npm run lint` → exit 0 (pre-existing boundaries deprecation warnings only); final `npm test` → **21 files, 236 tests passed**.
+- Runtime harness: real `mkdtemp` project directories and `FsAtomicWriter`; writer-owned call observation proves tombstone → removal → journal ordering. No filesystem mocks.
+
+### Files / boundary / status
+- Changed: `src/adapters/fs-beacon-store/fs-beacon-store.ts`, `tests/adapters/fs-beacon-store/abandon.test.ts`, `tasks.md`, and this progress file. Existing parent-approved planning correction remains unchanged in `design.md`, `spec.md`, and `tasks.md`.
+- Rollback: remove `abandonDraft`'s U7a body and the abandon test; revert only checkboxes 7.1–7.4 and this section. This does not touch U6 or the deferred U7b replay rows.
+- Delivery: stacked-to-main, PR 7a boundary only; no commit or lifecycle action performed. Authored count versus `9736448`, including the existing planning correction and untracked abandon test: **321** (294 additions + 27 deletions; ≤400).
+- Structured status consumed: `gentle-ai.sdd-status@2`, `applyState=ready`, `nextRecommended=apply`, `artifactStore=openspec`, repo-local `/home/pedro/pharos`; `actionContext.mode=repo-local`. No action-context or edit-root warning.
+
+### Remaining delegated tasks (exact persisted unchecked lines)
+- [ ] 7.5 RED: extend the test file — D1b's 3-row crash table: (a) crash after tombstone, before `draft.json` removal → same-key retry replays removal and journal completion before lookup, then returns the journal result; (b) crash after removal, before journal → replay writes the journal entry only, then returns that result; (c) crash after journal → complete, no action; confirm each fails before the corresponding `RecoverAction` rows exist. <!-- sdd-owner: implementation -->
+- [ ] 7.6 GREEN: extend `reconcile.ts` with D1b's classification rows and `apply` actions (`removed-abandoned-draft-file`, `wrote-journal-entry`), wired into step (1a) for `abandonDraft`. <!-- sdd-owner: implementation -->
+- [ ] 7.7 RED→GREEN: add the changed-input crash-retry case — after a committed tombstone but before its journal entry, the same key with changed logical input completes cleanup and writes the original journal entry before lookup, then returns `idempotency-key-conflict`; tombstone bytes remain unchanged. <!-- sdd-owner: implementation -->
+- [ ] 7.8 Final verification: `npx vitest run tests/adapters/fs-beacon-store/abandon.test.ts`; `npm run lint`; `npx tsc --noEmit`; record the U7b authored count and stop for ask-on-risk before any overage. <!-- sdd-owner: implementation -->
+
+Parent lifecycle: settlement and any commit/review/delivery activity are deferred to the parent.

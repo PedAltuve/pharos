@@ -46,11 +46,11 @@ The advisory lock file and any liveness-probe file are process-coordination arti
 - WHEN `FsBeaconStore` attempts to write `manifest.json` again for that version
 - THEN it returns a refusal value and the original `manifest.json` bytes are unchanged
 
-#### Scenario: Second write to tombstone.json is refused
+#### Scenario: Second abandonment preserves the tombstone
 
 - GIVEN a draft already abandoned with a written `tombstone.json`
-- WHEN abandonment is attempted again for the same draft
-- THEN it returns a refusal value and the original `tombstone.json` is unchanged
+- WHEN abandonment is attempted again with a fresh idempotency key
+- THEN the domain returns `draft-not-open` before any tombstone write, and the original `tombstone.json` is unchanged
 
 ### Requirement: One Advisory Lock Serializes Mutations Per Project
 

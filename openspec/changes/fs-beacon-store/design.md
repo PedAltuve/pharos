@@ -124,9 +124,11 @@ Replay is possible only because `manifest.json` (written at step 3, **before** t
 
 **`abandonDraft` write sequence** (inside the same locked envelope, after I1's domain `ok`):
 
-1. `createExclusive drafts/<D>/tombstone.json` ← ★ **COMMIT POINT** ★ (also gives `fs-beacon-store` R3 scenario 2 verbatim: a second abandonment hits `EEXIST` → `immutable-file-exists`)
+1. `createExclusive drafts/<D>/tombstone.json` ← ★ **COMMIT POINT** ★
 2. `removeAtomic drafts/<D>/draft.json` (§4:116, §6:178)
 3. `createExclusive` journal entry
+
+**Retry and refusal ordering.** A fresh-key second abandonment reconstructs the draft as `abandoned`, so the domain returns `draft-not-open` before the seam is reached. A same-key retry after completion returns its journal result; a changed logical input under that key returns `idempotency-key-conflict`. If a same-key retry finds the tombstone committed but its cleanup or journal missing, step 1a completes those actions before journal lookup, then returns the journal result (or the changed-input conflict). Tombstone bytes are immutable: an actual `createExclusive` `EEXIST` still maps to `immutable-file-exists`; it is not the ordinary second-abandonment path.
 
 | Crash window | On-disk state | Class → action |
 |---|---|---|
@@ -313,7 +315,7 @@ Naming follows `src/domain/beacon/refusals.ts` exactly: a `rule` discriminant in
 
 `BeaconStoreRefusal` composes in `BeaconRefusal` because a port mutation delegates to a domain mutation that can refuse, and R3 mandates a single error type per method. `beacon-store-port` R4's "stale-revision refusal" is therefore Slice C's existing `StaleDraftRevision` — literally "mirroring the pure domain's revision-bound semantics", raised after comparing `expectedRevision` to the persisted `draft.json`.
 
-**Scenario mapping**: R3/lock-failure → `lock-unavailable`; R3/not-found → `beacon-not-found`; R2/different-input → `idempotency-key-conflict`; `fs-beacon-store` R3 (both scenarios) → `immutable-file-exists`; `beacon-store-port` R4 → `stale-draft-revision`.
+**Scenario mapping**: R3/lock-failure → `lock-unavailable`; R3/not-found → `beacon-not-found`; R2/different-input → `idempotency-key-conflict`; `fs-beacon-store` R3 actual existing-file write → `immutable-file-exists`; ordinary fresh-key second abandonment → domain `draft-not-open`; `beacon-store-port` R4 → `stale-draft-revision`.
 
 **`stale-attempt-artifact` is the sixth member, and R3's "at minimum" permits it [R3].** `beacon-store-port` R3 enumerates four *minimum* disk-only failure modes; `stored-version-not-found` was already a fifth. This one exists because D6b's adoption probe has three outcomes, not two, and collapsing the third into `immutable-file-exists` was exactly the defect revision 3 fixes: it told the caller "corruption" about a state that is ordinary concurrency. Distinct discriminant, distinct remedy, exhaustive narrowing preserved. It is never returned by a read method.
 
