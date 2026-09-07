@@ -1,0 +1,64 @@
+name: Feature request
+description: Propose a scoped product capability or behavior change.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the product problem and the smallest useful outcome. Keep implementation details secondary to observable behavior.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or system problem needs to be solved?
+      placeholder: Describe the current limitation and who it affects.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What observable result should exist when this is complete?
+      placeholder: Describe the expected behavior and value.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included, and what is explicitly out of scope?
+      placeholder: |
+        Included:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the concrete conditions that must be demonstrated.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking change
+      description: Does this require an incompatible public contract change?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
