@@ -50,6 +50,7 @@ interface TombstoneFile {
   readonly finalHash: string;
   readonly reason: string;
   readonly abandonedAt: string;
+  readonly idempotency?: DraftIdempotencyStamp;
 }
 
 // D1e's mutable-commit-point stamp. Untyped `method` on disk, same reasoning
@@ -426,14 +427,28 @@ function isDraftWindowMethod(value: string): value is JournalMethod {
   return DRAFT_WINDOW_METHODS.has(value);
 }
 
+function isAbandonmentMethod(value: string): value is "abandonDraft" {
+  return value === "abandonDraft";
+}
+
 /**
  * D1e — the mutable-commit-point journal window. For each draft under
  * `beaconId` whose `draft.json` carries an idempotency stamp but whose
  * journal entry is missing, writes the missing entry from the stamp alone
  * (no stored snapshot, no re-execution). A tombstoned draft is D1b's
- * abandonment window, not this one, and is skipped. MUST be called with the
- * project lock already held (D5b) — this is step (1a) of the envelope.
+ * abandonment window: it finishes draft cleanup and writes the original
+ * journal entry from the tombstone stamp. MUST be called with the project
+ * lock already held (D5b) — this is step (1a) of the envelope.
  */
+export async function applyPendingProjectDraftReplays(
+  projectRoot: string,
+  writer: AtomicWriter,
+): Promise<void> {
+  for (const beaconId of await listBeaconIds(projectRoot)) {
+    await applyPendingDraftReplays(projectRoot, beaconId, writer);
+  }
+}
+
 export async function applyPendingDraftReplays(
   projectRoot: string,
   beaconId: string,
@@ -444,7 +459,35 @@ export async function applyPendingDraftReplays(
 
   for (const draftId of draftIds) {
     const tombstone = await readRecord<TombstoneFile>(layout.tombstone(beaconId, draftId), "tombstone");
-    if (tombstone !== undefined) continue;
+    if (tombstone !== undefined) {
+      const stamp = tombstone.idempotency;
+      if (stamp === undefined || !isAbandonmentMethod(stamp.method)) continue;
+
+      const existing = await readJournalEntry(projectRoot, stamp.keyHash);
+      if (existing !== undefined) continue;
+
+      // D1b — the tombstone is the abandonment commit point. Finish its
+      // pending mutable cleanup before creating the missing original journal
+      // entry; neither operation can replace an existing artifact.
+      const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
+      if (draft !== undefined) {
+        await writer.removeAtomic(layout.draftRecord(beaconId, draftId));
+      }
+      await mkdir(layout.journalIdempotency(), { recursive: true });
+      await createJournalEntry(
+        projectRoot,
+        {
+          key: stamp.key,
+          keyHash: stamp.keyHash,
+          method: stamp.method,
+          beaconId,
+          inputHash: stamp.inputHash,
+          result: { beaconId, versionId: null, draftId, revision: tombstone.finalRevision },
+        },
+        writer,
+      );
+      continue;
+    }
 
     const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
     if (draft === undefined) continue;

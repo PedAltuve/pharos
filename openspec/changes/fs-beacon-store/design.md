@@ -124,9 +124,13 @@ Replay is possible only because `manifest.json` (written at step 3, **before** t
 
 **`abandonDraft` write sequence** (inside the same locked envelope, after I1's domain `ok`):
 
-1. `createExclusive drafts/<D>/tombstone.json` ← ★ **COMMIT POINT** ★ (also gives `fs-beacon-store` R3 scenario 2 verbatim: a second abandonment hits `EEXIST` → `immutable-file-exists`)
+1. `createExclusive drafts/<D>/tombstone.json` ← ★ **COMMIT POINT** ★
 2. `removeAtomic drafts/<D>/draft.json` (§4:116, §6:178)
 3. `createExclusive` journal entry
+
+**Retry and refusal ordering.** A fresh-key second abandonment reconstructs the draft as `abandoned`, so the domain returns `draft-not-open` before the seam is reached. A same-key retry after completion returns its journal result; a changed logical input under that key returns `idempotency-key-conflict`. If a same-key retry finds the tombstone committed but its cleanup or journal missing, step 1a completes those actions before journal lookup, then returns the journal result (or the changed-input conflict). Tombstone bytes are immutable: an actual `createExclusive` `EEXIST` still maps to `immutable-file-exists`; it is not the ordinary second-abandonment path.
+
+**Project-global key correction [R5].** The journal keyspace is project-global, so step 1a MUST replay every sorted, validated beacon before *any* mutation's journal lookup, not only the target beacon. Otherwise A can commit a tombstone under `K`, crash before its journal, and B can claim `K`; A then cannot converge. This deliberately costs O(all beacons/drafts) per mutation and makes unrelated beacon corruption a mutation-time throw. The operator accepted both consequences; no index or journal-first redesign is introduced. Already-colliding committed artifacts are out of scope: recovery chooses no lexical winner and invents no repair policy.
 
 | Crash window | On-disk state | Class → action |
 |---|---|---|
@@ -194,7 +198,7 @@ Revoking a *superseded* (non-active) version never touches `active.json`, so its
 
 The replayed entry is fully reconstructible from `draft.json` alone: `key`, `key_hash`, `input_hash` and `method` come from the stamp, and `result` is `{ beacon_id: B, draft_id: D, version_id: null, revision }` with `revision` read from the same file. No stored snapshot and no re-execution.
 
-**Why this closes the stranding.** Step (1a) of the envelope runs scan-and-apply *before* step (1b)'s journal lookup. So on the honest same-key retry the replay writes the missing entry first, and (1b) then finds a journal hit with an equal `input_hash` and returns the re-read `Beacon` — the domain function is never reached, so neither `stale-draft-revision` nor `duplicate-draft-id` can fire. The window is closed by ordering that already existed, not by new machinery.
+**Why this closes the stranding.** Step (1a) of the envelope runs scan-and-apply *before* step (1b)'s journal lookup, across every sorted, validated beacon because the journal is project-global (D1b [R5]). So on the honest same-key retry the replay writes the missing entry first, and (1b) then finds a journal hit with an equal `input_hash` and returns the re-read `Beacon` — the domain function is never reached, so neither `stale-draft-revision` nor `duplicate-draft-id` can fire. The window is closed by ordering that already existed, not by new machinery.
 
 **Convergence.** The replay only ever *creates* a journal entry that is missing; it never rewrites one. From call 2 onward the first row applies and nothing is written, so `beacon-store-recovery` R1's convergence scenario holds for this window exactly as it does for the others.
 
@@ -313,7 +317,7 @@ Naming follows `src/domain/beacon/refusals.ts` exactly: a `rule` discriminant in
 
 `BeaconStoreRefusal` composes in `BeaconRefusal` because a port mutation delegates to a domain mutation that can refuse, and R3 mandates a single error type per method. `beacon-store-port` R4's "stale-revision refusal" is therefore Slice C's existing `StaleDraftRevision` — literally "mirroring the pure domain's revision-bound semantics", raised after comparing `expectedRevision` to the persisted `draft.json`.
 
-**Scenario mapping**: R3/lock-failure → `lock-unavailable`; R3/not-found → `beacon-not-found`; R2/different-input → `idempotency-key-conflict`; `fs-beacon-store` R3 (both scenarios) → `immutable-file-exists`; `beacon-store-port` R4 → `stale-draft-revision`.
+**Scenario mapping**: R3/lock-failure → `lock-unavailable`; R3/not-found → `beacon-not-found`; R2/different-input → `idempotency-key-conflict`; `fs-beacon-store` R3 actual existing-file write → `immutable-file-exists`; ordinary fresh-key second abandonment → domain `draft-not-open`; `beacon-store-port` R4 → `stale-draft-revision`.
 
 **`stale-attempt-artifact` is the sixth member, and R3's "at minimum" permits it [R3].** `beacon-store-port` R3 enumerates four *minimum* disk-only failure modes; `stored-version-not-found` was already a fifth. This one exists because D6b's adoption probe has three outcomes, not two, and collapsing the third into `immutable-file-exists` was exactly the defect revision 3 fixes: it told the caller "corruption" about a state that is ordinary concurrency. Distinct discriminant, distinct remedy, exhaustive narrowing preserved. It is never returned by a read method.
 
@@ -628,7 +632,9 @@ Every one of the six mutations runs the same envelope. Only the shaded projectio
 caller ── <mutation>(beaconId, cmd, key) ──▶ FsBeaconStore
    │
    │ (1)  ProjectLock.acquire()  ── EEXIST ──▶ liveness (D2) ──▶ lock-unavailable ✗
-   │ (1a) scan(beaconId) + apply pending replay actions      (D1, D1b–D1e / D5, lock held)
+   │ (1a) scan every sorted, validated beacon + apply replay (D1, D1b–D1e / D5, lock held) [R5]
+   │        ·  required before the project-global journal lookup; O(all beacons/drafts)
+   │        ·  unrelated corruption now blocks mutation; historical key collisions are not repaired
    │        ·  builds the keyHash → artifacts index used at (2a)
    │ (1b) journal lookup <keyHash>                            (needs only the command)
    │        ├ hit, same inputHash  ──▶ re-read Beacon, return  (no mutation)
