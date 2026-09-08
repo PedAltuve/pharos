@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,11 @@ import { project } from "../../../src/domain/semantics/index.js";
 import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
+import { keyHash } from "../../../src/adapters/fs-beacon-store/journal.js";
+import {
+  applyPendingProjectDraftReplays,
+  scanBeacon,
+} from "../../../src/adapters/fs-beacon-store/reconcile.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
 
 let projectDir: string;
@@ -66,6 +71,8 @@ async function seedOpenDraft(store: FsBeaconStore, draftId = "draft_1"): Promise
   }, `create-${draftId}`);
 }
 
+class InjectedCrash extends Error {}
+
 class RecordingWriter implements AtomicWriter {
   readonly leakedTempPolicy = "sweep-on-recover" as const;
   readonly calls: string[] = [];
@@ -87,6 +94,38 @@ class RecordingWriter implements AtomicWriter {
   async removeAtomic(path: string): Promise<void> {
     this.calls.push(path);
     await this.inner.removeAtomic(path);
+  }
+}
+
+class CrashAfterPathWriter implements AtomicWriter {
+  readonly leakedTempPolicy = "sweep-on-recover" as const;
+  private readonly inner = new FsAtomicWriter();
+  private seen = 0;
+
+  constructor(
+    private readonly suffix: string,
+    private readonly occurrence = 1,
+  ) {}
+
+  async writeAtomic(path: string, bytes: string): Promise<void> {
+    await this.inner.writeAtomic(path, bytes);
+    this.crashIfMatched(path);
+  }
+
+  async createExclusive(path: string, bytes: string): Promise<"created" | "exists"> {
+    const result = await this.inner.createExclusive(path, bytes);
+    if (result === "created") this.crashIfMatched(path);
+    return result;
+  }
+
+  async removeAtomic(path: string): Promise<void> {
+    await this.inner.removeAtomic(path);
+  }
+
+  private crashIfMatched(path: string): void {
+    if (path.endsWith(this.suffix) && ++this.seen === this.occurrence) {
+      throw new InjectedCrash(path);
+    }
   }
 }
 
@@ -128,6 +167,105 @@ describe("FsBeaconStore.approveDraft — hash re-verification (fs-beacon-store R
     const versionDir = join(projectDir, "beacons", "bcn_1", "versions", "ver_1");
     expect(await exists(join(versionDir, "semantics.json"))).toBe(false);
     expect(await exists(join(versionDir, "manifest.json"))).toBe(false);
+  });
+});
+
+describe("FsBeaconStore.approveDraft — crash before active swap (fs-beacon-store R5 S2)", () => {
+  it("leaves an aborted orphan that is neither active nor closed", async () => {
+    const store = new FsBeaconStore({
+      projectRoot: projectDir,
+      hasher,
+      writer: new CrashAfterPathWriter("manifest.json"),
+    });
+    await seedOpenDraft(store);
+
+    await expect(store.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .rejects.toBeInstanceOf(InjectedCrash);
+
+    const versionDir = join(projectDir, "beacons", "bcn_1", "versions", "ver_1");
+    expect(await exists(join(versionDir, "semantics.json"))).toBe(true);
+    expect(await exists(join(versionDir, "manifest.json"))).toBe(true);
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "active.json"))).toBe(false);
+
+    const scan = await scanBeacon(projectDir, "bcn_1");
+    expect(scan.orphanVersionIds).toEqual(["ver_1"]);
+    expect(scan.beacon.activeVersionId).toBeNull();
+    expect(scan.beacon.drafts.draft_1).toMatchObject({ status: "open" });
+  });
+
+  it("does not resurrect an orphan when a later approval commits a different version", async () => {
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir,
+      hasher,
+      writer: new CrashAfterPathWriter("manifest.json"),
+    });
+    await seedOpenDraft(crashingStore, "draft_1");
+    await seedOpenDraft(crashingStore, "draft_2");
+    await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "orphan-key"))
+      .rejects.toBeInstanceOf(InjectedCrash);
+
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    const result = await store.approveDraft("bcn_1", approveCmd({
+      draftId: "draft_2",
+      versionId: "ver_2",
+    }), "committed-key");
+
+    expect(result).toMatchObject({ ok: true, value: { activeVersionId: "ver_2" } });
+    const scan = await scanBeacon(projectDir, "bcn_1");
+    expect(scan.orphanVersionIds).toEqual(["ver_1"]);
+    expect(scan.beacon.versions).not.toHaveProperty("ver_1");
+    expect(scan.beacon.versions.ver_2).toMatchObject({ status: "active" });
+  });
+});
+
+describe("approval replay after active swap (beacon-store-recovery R3)", () => {
+  it("closes the draft and writes one journal entry without creating a second version", async () => {
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir,
+      hasher,
+      writer: new CrashAfterPathWriter("active.json"),
+    });
+    await seedOpenDraft(crashingStore);
+    await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .rejects.toBeInstanceOf(InjectedCrash);
+
+    await applyPendingProjectDraftReplays(projectDir, new FsAtomicWriter());
+    const firstReplay = await scanBeacon(projectDir, "bcn_1");
+    expect(firstReplay.beacon.drafts.draft_1).toMatchObject({
+      status: "closed",
+      approvedVersionId: "ver_1",
+    });
+    const journalDir = join(projectDir, "journal", "idempotency");
+    expect(await exists(join(journalDir, `${keyHash("approve-key")}.json`))).toBe(true);
+    expect(await readdir(journalDir)).toHaveLength(2);
+    expect(await readdir(join(projectDir, "beacons", "bcn_1", "versions"))).toEqual(["ver_1"]);
+
+    await applyPendingProjectDraftReplays(projectDir, new FsAtomicWriter());
+    const secondReplay = await scanBeacon(projectDir, "bcn_1");
+    expect(secondReplay.beacon.drafts.draft_1).toMatchObject({ status: "closed" });
+    expect(await readdir(journalDir)).toHaveLength(2);
+  });
+
+  it("writes only the missing journal entry when the draft was closed before the crash", async () => {
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir,
+      hasher,
+      writer: new CrashAfterPathWriter("draft.json", 2),
+    });
+    await seedOpenDraft(crashingStore);
+    await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .rejects.toBeInstanceOf(InjectedCrash);
+
+    await applyPendingProjectDraftReplays(projectDir, new FsAtomicWriter());
+    const replayed = await scanBeacon(projectDir, "bcn_1");
+    expect(replayed.beacon.drafts.draft_1).toMatchObject({
+      status: "closed",
+      approvedVersionId: "ver_1",
+    });
+    const journalDir = join(projectDir, "journal", "idempotency");
+    expect(await exists(join(journalDir, `${keyHash("approve-key")}.json`))).toBe(true);
+    expect(await readdir(journalDir)).toHaveLength(2);
+    expect(await readdir(join(projectDir, "beacons", "bcn_1", "versions"))).toEqual(["ver_1"]);
   });
 });
 

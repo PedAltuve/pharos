@@ -741,3 +741,41 @@ The current bounded candidate is **236 authored lines** before this progress sec
 - [ ] 8.8 GREEN: confirm 8.7 passes (D1's committed-set closure already excludes it by construction — no orphan is ever *pointed at*). <!-- sdd-owner: implementation -->
 - [ ] 8.9 RED: extend the test file — an `InjectedCrash` after step 4 (`active.json` swapped) but before the draft close: the previously approved draft ends up `closed` and exactly one journal entry exists after `recoverProject()` (stub, full method in U9), and no second version was created (`beacon-store-recovery` R3 S1); running the replay a second time changes nothing further (R3 S2); confirm both fail before D1's replay-5–6 rows exist. <!-- sdd-owner: implementation -->
 - [ ] 8.10 GREEN: extend `reconcile.ts` with D1's version-scoped classification table (aborted / replay-5–6 / replay-6-only / complete rows) and wire `apply`'s `closed-draft`/`wrote-journal-entry` actions into `approveDraft`'s step (1a). <!-- sdd-owner: implementation -->
+
+---
+
+## U8 delivery split — superseded decision
+
+The prior U8a note asking for a further split is superseded only for delivery planning by the user-approved three-slice boundary: U8a1 (8.1–8.4, complete), U8a2 (8.5–8.10, this section), and U8b (8.11–8.17, deferred). Strategy is `ask-on-risk`, resolved by explicit split; topology is `stacked-to-main`. No U8b behavior was started.
+
+## Work Unit U8a2 — approval crash classification and replay (8.5–8.10)
+
+**Status**: complete. Persisted task checkboxes 8.5–8.10 are checked. Strict TDD; authoritative `gentle-ai.sdd-status@2` was consumed (`applyState=ready`, repo-local root and allowed edit root `/home/pedro/pharos`, no warnings). Parent-owned attempt authority was not acquired, reset, or settled here.
+
+### Completed work
+- [x] 8.5–8.6: a real writer crash after `manifest.json` leaves both immutable artifacts, no active pointer, an open draft, and `scanBeacon` classification `orphanVersionIds: ["ver_1"]`.
+- [x] 8.7–8.8: a subsequent successful approval of a second draft activates only `ver_2`; the crashed `ver_1` remains excluded from reconstructed versions and orphan-classified.
+- [x] 8.9–8.10: an active-swap crash replays through the locked pre-lookup hook: it closes an open draft then creates the missing journal entry, or creates only that entry if the draft was already closed. A second replay adds neither a version nor a journal entry.
+
+### TDD Cycle Evidence
+| Tasks | Test / layer | Safety net | RED | GREEN / triangulation | Refactor |
+|---|---|---|---|---|---|
+| 8.5–8.8 | `approval.test.ts` / real-filesystem integration | 2/2 focused | The new crash-before-swap and non-resurrection tests were already green (4/4): U8a1's write ordering and U5's rooted walk already satisfied these no-code GREEN confirmations, so no behavior was regressed merely to manufacture RED. | Distinct no-active-pointer and later-committed-root fixtures pass. | None needed. |
+| 8.9–8.10 | same | 4/4 focused | 5-test run: 1 failed, open draft after active-swap crash. Triangulation run: 6 tests, 2 failed (open-draft and closed-draft/missing-journal windows). | 6/6 after D1 replay 5–6 wiring; both crash windows plus second-run convergence pass. | None needed. |
+
+### Verification and boundary
+- Focused: `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → **6 passed (6)**.
+- Static: `npm run lint`, `npx tsc --noEmit`, and `git diff --check` → exit 0 (lint emitted only pre-existing `eslint-plugin-boundaries` deprecation warnings).
+- Runtime harness: real `mkdtemp` projects and `FsAtomicWriter`; injected post-materialization crashes, no filesystem mocks.
+- Files: `tests/adapters/fs-beacon-store/approval.test.ts`, `src/adapters/fs-beacon-store/reconcile.ts`, persisted `tasks.md`, and this progress file. No `recoverProject()` public/report surface was added; U9 still owns that assembly. The U8a2 tests exercise its designated `reconcile.ts` scan/apply stub.
+- Workload: U8a2 incremental implementation is 138 approval-test lines plus 58 replay-source lines; task/progress evidence remains below the 400-new-authored-line cap. PR boundary: U8a2 only, stacked-to-main; no commit or delivery action.
+- Rollback: remove U8a2's crash/replay tests and `applyPendingApprovalReplay`, then revert only 8.5–8.10 checkboxes and this section; retain U8a1.
+
+### Remaining tasks (deferred U8b, exact persisted lines)
+- [ ] 8.11 RED: extend the test file — **the D6b RED test named by this run's instructions**: an `InjectedCrash` after `manifest.json` lands, then an *unrelated* successful `approveDraft` on a different draft advances `active.json`, then the same-key retry of the crashed approval: assert `stale-attempt-artifact`, **not** `immutable-file-exists` and not a throw, and that a fresh `versionId` under a fresh key then succeeds (D6b's normal-interleaving fix, DEF-2 MAJOR); confirm it fails against a byte-identity probe before implementing the field-partitioned comparison. <!-- sdd-owner: implementation -->
+- [ ] 8.12 GREEN: implement D6b's adoption probe at step (2a) of the envelope — after the domain call returns `ok`, before any write, resolve each write-once artifact's stamp against the current call per the 6-outcome table (absent → ordinary write; differing `key_hash` → `immutable-file-exists`; same `key_hash`, differing `input_hash` → `idempotency-key-conflict`; same `key_hash`/`input_hash`, input-determined fields equal, aggregate-derived fields equal → adopt; same `key_hash`/`input_hash`, input-determined equal, aggregate-derived differ → `stale-attempt-artifact`; same `key_hash`/`input_hash`, an input-determined field differs → throw `BeaconStoreCorruptionError`). Partition `manifest.json`'s fields exactly per D6b's table (`local_number`, `supersedes_version`, `approved_revision` are aggregate-derived; everything else named is input-determined); `semantics.json`'s entire body is input-determined. <!-- sdd-owner: implementation -->
+- [ ] 8.13 RED→GREEN: add the `approved_revision` regression test D6b's own remediation names — a crashed `approveDraft(K)` with `manifest.json` carrying `approved_revision: 3`, followed by a legal `updateDraft` on the same draft with byte-identical content (revision now 4, `reviewedHash` still matching), followed by the same-key retry of `K`: assert `stale-attempt-artifact`, never a throw. <!-- sdd-owner: implementation -->
+- [ ] 8.14 RED→GREEN: add the same-key-identical-adoption test — a crashed `approveDraft(K)` retried with the exact same input (no intervening mutation) adopts silently and resumes from the next unwritten artifact, producing exactly one version (`beacon-store-port` R2 S1, exercised end-to-end here). <!-- sdd-owner: implementation -->
+- [ ] 8.15 RED: extend the test file — `fs-beacon-store` R3 S1, literal: a *genuine second write* to an existing `manifest.json` (a different transaction, different `key_hash`, targeting an existing version directory) returns a refusal and the original `manifest.json` bytes are unchanged; confirm it is distinguished from the adoption case in 8.14 (different `key_hash` → `immutable-file-exists`, not adopt). <!-- sdd-owner: implementation -->
+- [ ] 8.16 GREEN: confirm 8.15 passes against 8.12's probe. <!-- sdd-owner: implementation -->
+- [ ] 8.17 Final verification: `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts`; `npm run lint`; `npx tsc --noEmit`. If this unit's authored diff exceeds 400 lines, apply the pre-agreed relief order (i)/(ii) from the forecast, or record a `size:exception`. <!-- sdd-owner: implementation -->
