@@ -7,7 +7,7 @@ import { BeaconStoreCorruptionError } from "./corruption.js";
 import { createJournalEntry, readJournalEntry } from "./journal.js";
 import type { JournalMethod } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
-import { deserializeRecord, type FileKind } from "./serialization.js";
+import { deserializeRecord, serializeRecord, type FileKind } from "./serialization.js";
 
 interface ManifestFile {
   readonly versionId: string;
@@ -26,6 +26,7 @@ interface ManifestFile {
     readonly branchedFromHash: string | null;
   };
   readonly supersedesVersion: string | null;
+  readonly idempotency?: DraftIdempotencyStamp;
 }
 
 interface RevocationFile {
@@ -431,6 +432,10 @@ function isAbandonmentMethod(value: string): value is "abandonDraft" {
   return value === "abandonDraft";
 }
 
+function isApprovalMethod(value: string): value is "approveDraft" {
+  return value === "approveDraft";
+}
+
 /**
  * D1e — the mutable-commit-point journal window. For each draft under
  * `beaconId` whose `draft.json` carries an idempotency stamp but whose
@@ -449,12 +454,63 @@ export async function applyPendingProjectDraftReplays(
   }
 }
 
+// D1's approval rows: active.json is the commit point. If its manifest's
+// approval stamp has no journal, close the still-open draft (step 5) and
+// create the missing journal entry (step 6). A closed draft skips step 5.
+async function applyPendingApprovalReplay(
+  projectRoot: string,
+  beaconId: string,
+  writer: AtomicWriter,
+): Promise<void> {
+  const layout = createLayout(projectRoot);
+  const { activeVersionId } = await scanVersions(projectRoot, beaconId);
+  if (activeVersionId === null) return;
+
+  const manifest = await readRecord<ManifestFile>(
+    layout.manifest(beaconId, activeVersionId),
+    "manifest",
+  );
+  const stamp = manifest?.idempotency;
+  if (manifest === undefined || stamp === undefined || !isApprovalMethod(stamp.method)) return;
+  if (await readJournalEntry(projectRoot, stamp.keyHash)) return;
+
+  const draftId = manifest.provenance.approvedDraftId;
+  const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
+  if (draft?.status === "open") {
+    await writer.writeAtomic(
+      layout.draftRecord(beaconId, draftId),
+      serializeRecord("draft", {
+        ...draft,
+        status: "closed",
+        approvedVersionId: activeVersionId,
+        closedAt: manifest.approval.approvedAt,
+        idempotency: stamp,
+      }),
+    );
+  }
+
+  await mkdir(layout.journalIdempotency(), { recursive: true });
+  await createJournalEntry(
+    projectRoot,
+    {
+      key: stamp.key,
+      keyHash: stamp.keyHash,
+      method: stamp.method,
+      beaconId,
+      inputHash: stamp.inputHash,
+      result: { beaconId, versionId: activeVersionId, draftId: null, revision: null },
+    },
+    writer,
+  );
+}
+
 export async function applyPendingDraftReplays(
   projectRoot: string,
   beaconId: string,
   writer: AtomicWriter,
 ): Promise<void> {
   const layout = createLayout(projectRoot);
+  await applyPendingApprovalReplay(projectRoot, beaconId, writer);
   const draftIds = await listSorted(layout.drafts(beaconId));
 
   for (const draftId of draftIds) {

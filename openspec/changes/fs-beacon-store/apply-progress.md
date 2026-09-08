@@ -697,3 +697,117 @@ Parent lifecycle: settlement and any commit/review/delivery activity are deferre
 - Consumed authoritative `gentle-ai.sdd-status@2`: `applyState=ready`, `nextRecommended=apply`, OpenSpec repo-local `/home/pedro/pharos`, allowed root `/home/pedro/pharos`; no action-context warning. The status's `94/136` count is consistent after rechecking the two corrective task rows.
 - Remaining delegated U7b tasks: none. Exact remaining change tasks are persisted as unchecked U8+ lines in `tasks.md`; they are outside this authorized correction.
 - Rollback boundary: remove the project-level wrapper and four call-site substitutions, the two cross-beacon tests, this D1b/D1e/data-flow amendment, and this correction section; retain U7a and all U8+ work.
+
+---
+
+## Work Unit U8a — approval transaction and crash recovery (tasks 8.1–8.10)
+
+**Status**: blocked by the explicit 400-authored-line slice cap after completing only tasks `8.1`–`8.4`; their persisted checkboxes are checked. Tasks `8.5`–`8.10` remain unchecked and were not started. Strict TDD mode.
+
+### Completed tasks and verification
+- [x] 8.1 RED — new approval integration test failed against the U7b stub with `Error: approveDraft: not yet implemented (lands in U8)`.
+- [x] 8.2 GREEN — lock-held pre-lookup replay, journal replay/conflict, persisted-beacon read, and the unchanged domain approval now re-verify the current draft hash before any version write. Focused test: `1 passed`.
+- [x] 8.3 RED — commit-point test failed before projection: the active-window observation was `undefined` because no `active.json` write occurred.
+- [x] 8.4 GREEN — writes `semantics.json` → `manifest.json` → `active.json` (commit) → closed `draft.json` → journal. The writer callback re-reads the store after the active rename and observes `ver_1` active before the final two writes. Focused test: `2 passed`.
+
+### TDD Cycle Evidence
+| Tasks | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| 8.1–8.2 | `approval.test.ts` / real-filesystem integration | `npm test` baseline: 21 files, 242 tests passed | 1 failed: pre-U8 stub threw `approveDraft: not yet implemented` | 1/1 passed after lock/read/domain hash gate | Changed persisted draft content plus absent version artifacts exercise a distinct refusal/no-write branch | Used existing envelope helpers; no behavior-only refactor needed |
+| 8.3–8.4 | `approval.test.ts` / real-filesystem integration | 1/1 focused passing | 1 failed: no active-window observation before projection | 2/2 passed after ordered projection | Asserts all five writes and an independently re-read active version during the post-swap/pre-close window | Corrected semantics projection to `project(draft.content)` so valid normalized content serializes |
+
+### Verification
+- `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → 1 file, **2/2 passed**.
+- `npm run lint` → exit 0; pre-existing `eslint-plugin-boundaries` deprecation warnings only.
+- `npx tsc --noEmit` → exit 0.
+- `npm test` → 22 files, **244/244 passed**.
+- `git diff --check` → exit 0.
+- Runtime harness: real `mkdtemp` directories, real `FsAtomicWriter`, and a writer callback immediately after `active.json` atomic materialization; no filesystem mocks.
+
+### Workload / blocking decision
+The current bounded candidate is **236 authored lines** before this progress section (`228` additions, `8` deletions: `155` new approval-test lines; tracked source/task delta `73` additions plus `8` deletions). The still-unstarted crash-before-swap/orphan/later-approval/replay-5–6 work requires further independent real-filesystem crash fixtures and D1 replay logic; completing it in this slice would exceed the 400-line cap. No code-golfing, behavior compression, U8b adoption work, or delivery action was attempted.
+
+**Decision needed before apply can resume**: approve one further cohesive split of U8a (`8.1`–`8.4` retained as the first boundary, `8.5`–`8.10` as a later boundary) or explicitly grant `size:exception` for U8a. Current delivery topology remains `stacked-to-main`; no commit/PR was created.
+
+### Files and rollback boundary
+- Changed: `src/adapters/fs-beacon-store/fs-beacon-store.ts`, `tests/adapters/fs-beacon-store/approval.test.ts`, persisted task checkboxes `8.1`–`8.4`, and this progress section.
+- Rollback: revert `approveDraft` to its U7b stub; delete `approval.test.ts`; revert only checkboxes `8.1`–`8.4` and this section. U1–U7b are untouched.
+- Structured status consumed: `gentle-ai.sdd-status@2`, authoritative OpenSpec, `dependencies.apply=ready`, `nextRecommended=apply`, `actionContext.mode=repo-local`, allowed root `/home/pedro/pharos`; no action-context or edit-root warnings. Parent-owned attempt authority was consumed only as context; no token is recorded here.
+
+### Remaining delegated tasks (exact persisted unchecked lines)
+- [ ] 8.5 RED: extend the test file — an `InjectedCrash` after step 3 completes (both `semantics.json`/`manifest.json` present) but before step 4's rename: the new version's manifest/semantics exist, but `active.json` does not reference it and the draft is not closed (`fs-beacon-store` R5 S2, literal); `recoverProject()`'s scan (stub call into `reconcile.ts`, full method lands in U9) classifies it `aborted`, never active (`beacon-store-recovery` R2 S1); confirm it fails. <!-- sdd-owner: implementation -->
+- [ ] 8.6 GREEN: confirm 8.5 passes against the write sequence from 8.4 plus U5's existing orphan classification (no change expected beyond wiring the real `approveDraft` writes into the fixtures the scan already reads). <!-- sdd-owner: implementation -->
+- [ ] 8.7 RED: extend the test file — a *later*, successful `approveDraft` on a different draft does not resurrect the orphan from 8.5: the orphan stays unreferenced and unreported as active (`beacon-store-recovery` R2 S2); confirm it fails before the walk correctly excludes it under a second committed root. <!-- sdd-owner: implementation -->
+- [ ] 8.8 GREEN: confirm 8.7 passes (D1's committed-set closure already excludes it by construction — no orphan is ever *pointed at*). <!-- sdd-owner: implementation -->
+- [ ] 8.9 RED: extend the test file — an `InjectedCrash` after step 4 (`active.json` swapped) but before the draft close: the previously approved draft ends up `closed` and exactly one journal entry exists after `recoverProject()` (stub, full method in U9), and no second version was created (`beacon-store-recovery` R3 S1); running the replay a second time changes nothing further (R3 S2); confirm both fail before D1's replay-5–6 rows exist. <!-- sdd-owner: implementation -->
+- [ ] 8.10 GREEN: extend `reconcile.ts` with D1's version-scoped classification table (aborted / replay-5–6 / replay-6-only / complete rows) and wire `apply`'s `closed-draft`/`wrote-journal-entry` actions into `approveDraft`'s step (1a). <!-- sdd-owner: implementation -->
+
+---
+
+## U8 delivery split — superseded decision
+
+The prior U8a note asking for a further split is superseded only for delivery planning by the user-approved three-slice boundary: U8a1 (8.1–8.4, complete), U8a2 (8.5–8.10, this section), and U8b (8.11–8.17, deferred). Strategy is `ask-on-risk`, resolved by explicit split; topology is `stacked-to-main`. No U8b behavior was started.
+
+## Work Unit U8a2 — approval crash classification and replay (8.5–8.10)
+
+**Status**: complete. Persisted task checkboxes 8.5–8.10 are checked. Strict TDD; authoritative `gentle-ai.sdd-status@2` was consumed (`applyState=ready`, repo-local root and allowed edit root `/home/pedro/pharos`, no warnings). Parent-owned attempt authority was not acquired, reset, or settled here.
+
+### Completed work
+- [x] 8.5–8.6: a real writer crash after `manifest.json` leaves both immutable artifacts, no active pointer, an open draft, and `scanBeacon` classification `orphanVersionIds: ["ver_1"]`.
+- [x] 8.7–8.8: a subsequent successful approval of a second draft activates only `ver_2`; the crashed `ver_1` remains excluded from reconstructed versions and orphan-classified.
+- [x] 8.9–8.10: an active-swap crash replays through the locked pre-lookup hook: it closes an open draft then creates the missing journal entry, or creates only that entry if the draft was already closed. A second replay adds neither a version nor a journal entry.
+
+### TDD Cycle Evidence
+| Tasks | Test / layer | Safety net | RED | GREEN / triangulation | Refactor |
+|---|---|---|---|---|---|
+| 8.5–8.8 | `approval.test.ts` / real-filesystem integration | 2/2 focused | The new crash-before-swap and non-resurrection tests were already green (4/4): U8a1's write ordering and U5's rooted walk already satisfied these no-code GREEN confirmations, so no behavior was regressed merely to manufacture RED. | Distinct no-active-pointer and later-committed-root fixtures pass. | None needed. |
+| 8.9–8.10 | same | 4/4 focused | 5-test run: 1 failed, open draft after active-swap crash. Triangulation run: 6 tests, 2 failed (open-draft and closed-draft/missing-journal windows). | 6/6 after D1 replay 5–6 wiring; both crash windows plus second-run convergence pass. | None needed. |
+
+### Verification and boundary
+- Focused: `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → **6 passed (6)**.
+- Static: `npm run lint`, `npx tsc --noEmit`, and `git diff --check` → exit 0 (lint emitted only pre-existing `eslint-plugin-boundaries` deprecation warnings).
+- Runtime harness: real `mkdtemp` projects and `FsAtomicWriter`; injected post-materialization crashes, no filesystem mocks.
+- Files: `tests/adapters/fs-beacon-store/approval.test.ts`, `src/adapters/fs-beacon-store/reconcile.ts`, persisted `tasks.md`, and this progress file. No `recoverProject()` public/report surface was added; U9 still owns that assembly. The U8a2 tests exercise its designated `reconcile.ts` scan/apply stub.
+- Workload: U8a2 incremental implementation is 138 approval-test lines plus 58 replay-source lines; task/progress evidence remains below the 400-new-authored-line cap. PR boundary: U8a2 only, stacked-to-main; no commit or delivery action.
+- Rollback: remove U8a2's crash/replay tests and `applyPendingApprovalReplay`, then revert only 8.5–8.10 checkboxes and this section; retain U8a1.
+
+### Remaining tasks (deferred U8b, exact persisted lines)
+- [ ] 8.11 RED: extend the test file — **the D6b RED test named by this run's instructions**: an `InjectedCrash` after `manifest.json` lands, then an *unrelated* successful `approveDraft` on a different draft advances `active.json`, then the same-key retry of the crashed approval: assert `stale-attempt-artifact`, **not** `immutable-file-exists` and not a throw, and that a fresh `versionId` under a fresh key then succeeds (D6b's normal-interleaving fix, DEF-2 MAJOR); confirm it fails against a byte-identity probe before implementing the field-partitioned comparison. <!-- sdd-owner: implementation -->
+- [ ] 8.12 GREEN: implement D6b's adoption probe at step (2a) of the envelope — after the domain call returns `ok`, before any write, resolve each write-once artifact's stamp against the current call per the 6-outcome table (absent → ordinary write; differing `key_hash` → `immutable-file-exists`; same `key_hash`, differing `input_hash` → `idempotency-key-conflict`; same `key_hash`/`input_hash`, input-determined fields equal, aggregate-derived fields equal → adopt; same `key_hash`/`input_hash`, input-determined equal, aggregate-derived differ → `stale-attempt-artifact`; same `key_hash`/`input_hash`, an input-determined field differs → throw `BeaconStoreCorruptionError`). Partition `manifest.json`'s fields exactly per D6b's table (`local_number`, `supersedes_version`, `approved_revision` are aggregate-derived; everything else named is input-determined); `semantics.json`'s entire body is input-determined. <!-- sdd-owner: implementation -->
+- [ ] 8.13 RED→GREEN: add the `approved_revision` regression test D6b's own remediation names — a crashed `approveDraft(K)` with `manifest.json` carrying `approved_revision: 3`, followed by a legal `updateDraft` on the same draft with byte-identical content (revision now 4, `reviewedHash` still matching), followed by the same-key retry of `K`: assert `stale-attempt-artifact`, never a throw. <!-- sdd-owner: implementation -->
+- [ ] 8.14 RED→GREEN: add the same-key-identical-adoption test — a crashed `approveDraft(K)` retried with the exact same input (no intervening mutation) adopts silently and resumes from the next unwritten artifact, producing exactly one version (`beacon-store-port` R2 S1, exercised end-to-end here). <!-- sdd-owner: implementation -->
+- [ ] 8.15 RED: extend the test file — `fs-beacon-store` R3 S1, literal: a *genuine second write* to an existing `manifest.json` (a different transaction, different `key_hash`, targeting an existing version directory) returns a refusal and the original `manifest.json` bytes are unchanged; confirm it is distinguished from the adoption case in 8.14 (different `key_hash` → `immutable-file-exists`, not adopt). <!-- sdd-owner: implementation -->
+- [ ] 8.16 GREEN: confirm 8.15 passes against 8.12's probe. <!-- sdd-owner: implementation -->
+- [ ] 8.17 Final verification: `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts`; `npm run lint`; `npx tsc --noEmit`. If this unit's authored diff exceeds 400 lines, apply the pre-agreed relief order (i)/(ii) from the forecast, or record a `size:exception`. <!-- sdd-owner: implementation -->
+
+---
+
+## Work Unit U8b — D6b adoption and immutable-artifact refusals (tasks 8.11–8.17)
+
+**Status**: complete. Tasks `8.11`–`8.17` are visibly checked in persisted `tasks.md`. Strict TDD; current PR boundary is U8b only, stacked-to-main.
+
+### Completed tasks
+- [x] 8.11–8.12: implemented the pre-write D6b probe for `semantics.json` and `manifest.json`. It stamps semantics, partitions manifest fields exactly (`local_number`, `supersedes_version`, `approved_revision` aggregate-derived; all other specified fields input-determined), and returns write/adopt/conflict/stale/corruption/immutable outcomes before writes.
+- [x] 8.13: same-content revision 3→4 retry returns `stale-attempt-artifact`, not a throw.
+- [x] 8.14: an identical same-key retry adopts both artifacts and completes exactly one version.
+- [x] 8.15–8.16: a different key targeting the existing manifest returns `immutable-file-exists`; original manifest bytes remain unchanged.
+- [x] 8.17: focused test, lint, typecheck, and diff check passed.
+
+### TDD Cycle Evidence
+| Tasks | Test / layer | Safety net | RED | GREEN / triangulation | Refactor |
+|---|---|---|---|---|---|
+| 8.11–8.12 | `approval.test.ts` / real-filesystem integration | `6/6` focused passing | Added five D6b scenarios first; `11`-test RED run had four intended failures: stale attempt was a domain stale-origin refusal, approved revision/adoption/input conflict were immutable refusals. | `11/11` after field-partitioned probe. Covers ordinary absent write (existing R5 path), different key, same-key changed input, identical adoption, aggregate-derived stale, and input-determined corruption. | Extracted parse/stamp/partition helpers; reran focused suite green. |
+| 8.13–8.14 | same | `6/6` focused passing | Revision and identical-retry assertions failed before probe as immutable refusals. | Both real crash/retry paths pass, including one-version assertion. | Included in helper extraction above. |
+| 8.15–8.16 | same | `6/6` focused passing | Different-key existing-manifest assertion was written before the probe. | Immutable refusal and byte identity pass. | No further refactor needed. |
+| 8.17 | same | `11/11` focused passing | N/A — verification task. | `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → 1 file, 11 passed; `npm run lint` → exit 0; `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0. | N/A. |
+
+### Files and verification
+- Changed: `src/adapters/fs-beacon-store/fs-beacon-store.ts`; `tests/adapters/fs-beacon-store/approval.test.ts`; persisted task checkboxes `8.11`–`8.17`; this bounded section. `journal.ts` and `reconcile.ts` were not changed by U8b.
+- Runtime harness: real `mkdtemp` projects, `FsAtomicWriter`, and injected post-materialisation manifest crashes; no filesystem mocks. Full `npm test` after focused verification → 22 files, 253 passed.
+- Deviation: none. The semantic artifact now carries the D6b stamp via the approval projection so its entire projected body can participate in the pre-write comparison; no serializer file was widened.
+- Remaining delegated tasks: none. U9 and later task lines remain unchecked and are outside this authorized U8b boundary.
+
+### Workload / rollback / status
+- **Immutable-baseline correction:** against provider-owned U8a1/U8a2 tree `43fd702d11916b3a9ea4d0aa15c88ddc1b20bedd`, the current U8b code/test delta is `140 additions + 9 deletions` in `fs-beacon-store.ts` and `100 additions + 1 deletion` in `approval.test.ts`: **240 additions + 10 deletions = 250** changed lines. This supersedes the unreproducible 311-line attribution; U8b remains below the 400-line cap. No code-golfing or exception was used.
+- Rollback boundary: remove the D6b probe/stamped-semantics approval delta and the five U8b tests; revert only task checkboxes `8.11`–`8.17` and this section. Retain U8a1/U8a2.
+- Consumed authoritative `gentle-ai.sdd-status@2`: OpenSpec apply ready, repo-local workspace and allowed root `/home/pedro/pharos`; no action-context warnings. Parent-owned attempt authority was not acquired, reset, rescaled, or settled here.
