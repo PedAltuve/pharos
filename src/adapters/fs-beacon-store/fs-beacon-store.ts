@@ -18,6 +18,7 @@ import type {
 import type {
   BeaconStoreRefusal,
   ImmutableArtifact,
+  LockUnavailable,
 } from "../../domain/ports/beacon-store-refusals.js";
 import {
   abandonDraft as domainAbandonDraft,
@@ -50,7 +51,14 @@ import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { getOwn } from "./records.js";
-import { applyPendingProjectDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
+import {
+  applyPendingProjectDraftReplays,
+  applyRecovery,
+  listBeaconIds,
+  scanBeacon,
+  scanRecovery,
+  type RecoverReport,
+} from "./reconcile.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
 import { serializeRecord } from "./serialization.js";
 
@@ -643,6 +651,24 @@ export class FsBeaconStore implements BeaconStore {
         beaconId, versionId: cmd.versionId, draftId: null, revision: null,
       });
       return mutated;
+    } finally {
+      await this.lock.release();
+    }
+  }
+
+  async recoverProject(): Promise<Result<RecoverReport, LockUnavailable>> {
+    const report = await scanRecovery(this.projectRoot);
+    if (report.actions.length === 0) return ok(report);
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const authoritative = await scanRecovery(this.projectRoot);
+      if (authoritative.actions.length > 0) {
+        await applyRecovery(this.projectRoot, this.writer, authoritative, this.lock.staleAfterMs);
+      }
+      const postScan = await scanRecovery(this.projectRoot);
+      return ok({ artifacts: postScan.artifacts, actions: authoritative.actions });
     } finally {
       await this.lock.release();
     }
