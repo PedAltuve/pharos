@@ -697,3 +697,47 @@ Parent lifecycle: settlement and any commit/review/delivery activity are deferre
 - Consumed authoritative `gentle-ai.sdd-status@2`: `applyState=ready`, `nextRecommended=apply`, OpenSpec repo-local `/home/pedro/pharos`, allowed root `/home/pedro/pharos`; no action-context warning. The status's `94/136` count is consistent after rechecking the two corrective task rows.
 - Remaining delegated U7b tasks: none. Exact remaining change tasks are persisted as unchecked U8+ lines in `tasks.md`; they are outside this authorized correction.
 - Rollback boundary: remove the project-level wrapper and four call-site substitutions, the two cross-beacon tests, this D1b/D1e/data-flow amendment, and this correction section; retain U7a and all U8+ work.
+
+---
+
+## Work Unit U8a — approval transaction and crash recovery (tasks 8.1–8.10)
+
+**Status**: blocked by the explicit 400-authored-line slice cap after completing only tasks `8.1`–`8.4`; their persisted checkboxes are checked. Tasks `8.5`–`8.10` remain unchecked and were not started. Strict TDD mode.
+
+### Completed tasks and verification
+- [x] 8.1 RED — new approval integration test failed against the U7b stub with `Error: approveDraft: not yet implemented (lands in U8)`.
+- [x] 8.2 GREEN — lock-held pre-lookup replay, journal replay/conflict, persisted-beacon read, and the unchanged domain approval now re-verify the current draft hash before any version write. Focused test: `1 passed`.
+- [x] 8.3 RED — commit-point test failed before projection: the active-window observation was `undefined` because no `active.json` write occurred.
+- [x] 8.4 GREEN — writes `semantics.json` → `manifest.json` → `active.json` (commit) → closed `draft.json` → journal. The writer callback re-reads the store after the active rename and observes `ver_1` active before the final two writes. Focused test: `2 passed`.
+
+### TDD Cycle Evidence
+| Tasks | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| 8.1–8.2 | `approval.test.ts` / real-filesystem integration | `npm test` baseline: 21 files, 242 tests passed | 1 failed: pre-U8 stub threw `approveDraft: not yet implemented` | 1/1 passed after lock/read/domain hash gate | Changed persisted draft content plus absent version artifacts exercise a distinct refusal/no-write branch | Used existing envelope helpers; no behavior-only refactor needed |
+| 8.3–8.4 | `approval.test.ts` / real-filesystem integration | 1/1 focused passing | 1 failed: no active-window observation before projection | 2/2 passed after ordered projection | Asserts all five writes and an independently re-read active version during the post-swap/pre-close window | Corrected semantics projection to `project(draft.content)` so valid normalized content serializes |
+
+### Verification
+- `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → 1 file, **2/2 passed**.
+- `npm run lint` → exit 0; pre-existing `eslint-plugin-boundaries` deprecation warnings only.
+- `npx tsc --noEmit` → exit 0.
+- `npm test` → 22 files, **244/244 passed**.
+- `git diff --check` → exit 0.
+- Runtime harness: real `mkdtemp` directories, real `FsAtomicWriter`, and a writer callback immediately after `active.json` atomic materialization; no filesystem mocks.
+
+### Workload / blocking decision
+The current bounded candidate is **236 authored lines** before this progress section (`228` additions, `8` deletions: `155` new approval-test lines; tracked source/task delta `73` additions plus `8` deletions). The still-unstarted crash-before-swap/orphan/later-approval/replay-5–6 work requires further independent real-filesystem crash fixtures and D1 replay logic; completing it in this slice would exceed the 400-line cap. No code-golfing, behavior compression, U8b adoption work, or delivery action was attempted.
+
+**Decision needed before apply can resume**: approve one further cohesive split of U8a (`8.1`–`8.4` retained as the first boundary, `8.5`–`8.10` as a later boundary) or explicitly grant `size:exception` for U8a. Current delivery topology remains `stacked-to-main`; no commit/PR was created.
+
+### Files and rollback boundary
+- Changed: `src/adapters/fs-beacon-store/fs-beacon-store.ts`, `tests/adapters/fs-beacon-store/approval.test.ts`, persisted task checkboxes `8.1`–`8.4`, and this progress section.
+- Rollback: revert `approveDraft` to its U7b stub; delete `approval.test.ts`; revert only checkboxes `8.1`–`8.4` and this section. U1–U7b are untouched.
+- Structured status consumed: `gentle-ai.sdd-status@2`, authoritative OpenSpec, `dependencies.apply=ready`, `nextRecommended=apply`, `actionContext.mode=repo-local`, allowed root `/home/pedro/pharos`; no action-context or edit-root warnings. Parent-owned attempt authority was consumed only as context; no token is recorded here.
+
+### Remaining delegated tasks (exact persisted unchecked lines)
+- [ ] 8.5 RED: extend the test file — an `InjectedCrash` after step 3 completes (both `semantics.json`/`manifest.json` present) but before step 4's rename: the new version's manifest/semantics exist, but `active.json` does not reference it and the draft is not closed (`fs-beacon-store` R5 S2, literal); `recoverProject()`'s scan (stub call into `reconcile.ts`, full method lands in U9) classifies it `aborted`, never active (`beacon-store-recovery` R2 S1); confirm it fails. <!-- sdd-owner: implementation -->
+- [ ] 8.6 GREEN: confirm 8.5 passes against the write sequence from 8.4 plus U5's existing orphan classification (no change expected beyond wiring the real `approveDraft` writes into the fixtures the scan already reads). <!-- sdd-owner: implementation -->
+- [ ] 8.7 RED: extend the test file — a *later*, successful `approveDraft` on a different draft does not resurrect the orphan from 8.5: the orphan stays unreferenced and unreported as active (`beacon-store-recovery` R2 S2); confirm it fails before the walk correctly excludes it under a second committed root. <!-- sdd-owner: implementation -->
+- [ ] 8.8 GREEN: confirm 8.7 passes (D1's committed-set closure already excludes it by construction — no orphan is ever *pointed at*). <!-- sdd-owner: implementation -->
+- [ ] 8.9 RED: extend the test file — an `InjectedCrash` after step 4 (`active.json` swapped) but before the draft close: the previously approved draft ends up `closed` and exactly one journal entry exists after `recoverProject()` (stub, full method in U9), and no second version was created (`beacon-store-recovery` R3 S1); running the replay a second time changes nothing further (R3 S2); confirm both fail before D1's replay-5–6 rows exist. <!-- sdd-owner: implementation -->
+- [ ] 8.10 GREEN: extend `reconcile.ts` with D1's version-scoped classification table (aborted / replay-5–6 / replay-6-only / complete rows) and wire `apply`'s `closed-draft`/`wrote-journal-entry` actions into `approveDraft`'s step (1a). <!-- sdd-owner: implementation -->

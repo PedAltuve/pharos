@@ -17,18 +17,21 @@ import type {
 import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
 import {
   abandonDraft as domainAbandonDraft,
+  approveDraft as domainApproveDraft,
   createDraft as domainCreateDraft,
   forkDraft as domainForkDraft,
   resolveActiveVersion,
   updateDraft as domainUpdateDraft,
 } from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
+import { project } from "../../domain/semantics/index.js";
 import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
 import { FsAtomicWriter } from "./atomic-writer.js";
 import {
   abandonDraftInput,
+  approveInput,
   createDraftInput,
   createJournalEntry,
   forkDraftInput,
@@ -444,10 +447,72 @@ export class FsBeaconStore implements BeaconStore {
     cmd: ApproveDraftCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("approveDraft: not yet implemented (lands in U8)");
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    if (classifyId(cmd.draftId, "existing") !== "valid") {
+      return err({ rule: "draft-not-found", draftId: cmd.draftId });
+    }
+    if (classifyId(cmd.versionId, "creation") !== "valid") {
+      return err({ rule: "invalid-id", field: "versionId", value: cmd.versionId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(approveInput(beaconId, cmd), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+      const mutated = domainApproveDraft(beacon, cmd, this.hasher);
+      if (!mutated.ok) return mutated;
+
+      const draft = getOwn(mutated.value.drafts, cmd.draftId);
+      const version = getOwn(mutated.value.versions, cmd.versionId);
+      if (draft === undefined || draft.status !== "closed" || version === undefined) {
+        throw new Error(`approveDraft invariant violated for draft "${cmd.draftId}"`);
+      }
+      const semantics = layout.semantics(beaconId, cmd.versionId);
+      const manifest = layout.manifest(beaconId, cmd.versionId);
+      await mkdir(dirname(semantics), { recursive: true });
+      if (await this.writer.createExclusive(semantics, serializeRecord("semantics", project(draft.content))) === "exists") {
+        return err({ rule: "immutable-file-exists", artifact: "semantics", beaconId, ownerId: cmd.versionId });
+      }
+      if (await this.writer.createExclusive(manifest, serializeRecord("manifest", {
+        versionId: version.versionId,
+        localNumber: version.localNumber,
+        approval: version.approval,
+        provenance: version.provenance,
+        supersedesVersion: beacon.activeVersionId,
+        idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "approveDraft" },
+      })) === "exists") {
+        return err({ rule: "immutable-file-exists", artifact: "manifest", beaconId, ownerId: cmd.versionId });
+      }
+      await this.writeIntoDir(
+        layout.active(beaconId),
+        serializeRecord("active", { activeVersionId: cmd.versionId }),
+      );
+      await this.writeIntoDir(
+        layout.draftRecord(beaconId, cmd.draftId),
+        serializeRecord("draft", {
+          ...draft,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "approveDraft" },
+        }),
+      );
+      await this.recordJournalEntry(key, hash, "approveDraft", beaconId, requestedInputHash, {
+        beaconId, versionId: cmd.versionId, draftId: null, revision: null,
+      });
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 
   async revokeVersion(
