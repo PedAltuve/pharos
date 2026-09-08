@@ -24,6 +24,7 @@ import {
   approveDraft as domainApproveDraft,
   createDraft as domainCreateDraft,
   forkDraft as domainForkDraft,
+  revokeVersion as domainRevokeVersion,
   resolveActiveVersion,
   updateDraft as domainUpdateDraft,
 } from "../../domain/beacon/index.js";
@@ -42,6 +43,7 @@ import {
   inputHash,
   keyHash,
   lookupJournal,
+  revokeVersionInput,
   updateDraftInput,
 } from "./journal.js";
 import type { JournalMethod, JournalResult } from "./journal.js";
@@ -651,9 +653,57 @@ export class FsBeaconStore implements BeaconStore {
     cmd: RevokeVersionCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("revokeVersion: not yet implemented (lands in U9)");
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    if (classifyId(cmd.versionId, "existing") !== "valid") {
+      return err({ rule: "version-not-found", versionId: cmd.versionId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(revokeVersionInput(beaconId, cmd), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+      const mutated = domainRevokeVersion(beacon, cmd);
+      if (!mutated.ok) return mutated;
+
+      const version = getOwn(mutated.value.versions, cmd.versionId);
+      if (version === undefined || version.status !== "revoked") {
+        throw new Error(`revokeVersion invariant violated for version "${cmd.versionId}"`);
+      }
+      await mkdir(dirname(layout.revocation(beaconId, cmd.versionId)), { recursive: true });
+      const created = await this.writer.createExclusive(
+        layout.revocation(beaconId, cmd.versionId),
+        serializeRecord("revocation", {
+          previousStatus: version.previousStatus,
+          revocation: version.revocation,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "revokeVersion" },
+        }),
+      );
+      if (created === "exists") {
+        return err({
+          rule: "immutable-file-exists", artifact: "revocation", beaconId, ownerId: cmd.versionId,
+        });
+      }
+      if (beacon.activeVersionId === cmd.versionId) {
+        await this.writer.removeAtomic(layout.active(beaconId));
+      }
+      await this.recordJournalEntry(key, hash, "revokeVersion", beaconId, requestedInputHash, {
+        beaconId, versionId: cmd.versionId, draftId: null, revision: null,
+      });
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 }

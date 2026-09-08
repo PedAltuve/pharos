@@ -811,3 +811,45 @@ The prior U8a note asking for a further split is superseded only for delivery pl
 - **Immutable-baseline correction:** against provider-owned U8a1/U8a2 tree `43fd702d11916b3a9ea4d0aa15c88ddc1b20bedd`, the current U8b code/test delta is `140 additions + 9 deletions` in `fs-beacon-store.ts` and `100 additions + 1 deletion` in `approval.test.ts`: **240 additions + 10 deletions = 250** changed lines. This supersedes the unreproducible 311-line attribution; U8b remains below the 400-line cap. No code-golfing or exception was used.
 - Rollback boundary: remove the D6b probe/stamped-semantics approval delta and the five U8b tests; revert only task checkboxes `8.11`–`8.17` and this section. Retain U8a1/U8a2.
 - Consumed authoritative `gentle-ai.sdd-status@2`: OpenSpec apply ready, repo-local workspace and allowed root `/home/pedro/pharos`; no action-context warnings. Parent-owned attempt authority was not acquired, reset, rescaled, or settled here.
+
+---
+
+## Work Unit U9a — D1c revocation and replay (tasks 9.1–9.4)
+
+**Status**: complete for the authorized U9a boundary. Persisted `tasks.md` visibly marks `9.1`–`9.4` as `[x]`; tasks `9.5`–`9.11` remain deferred for U9b and later work. **Mode**: Strict TDD.
+
+### Completed tasks and files
+- [x] 9.1 RED / 9.2 GREEN — added `tests/adapters/fs-beacon-store/revocation.test.ts` and implemented `FsBeaconStore.revokeVersion` in `src/adapters/fs-beacon-store/fs-beacon-store.ts`: exclusive `revocation.json` commit point, conditional active-pointer removal, then journal creation. Active and superseded cases prove the ordered and conditional behavior.
+- [x] 9.3 RED / 9.4 GREEN — added all D1c crash-window rows and extended `src/adapters/fs-beacon-store/reconcile.ts` with revocation classification/replay. A missing journal after a stamped `revocation.json` conditionally performs the named `removed-revoked-active-pointer` action, then writes the original journal entry, before the mutation's journal lookup.
+- Persisted checkbox updates: only `9.1`, `9.2`, `9.3`, and `9.4` changed from `[ ]` to `[x]` in `openspec/changes/fs-beacon-store/tasks.md`.
+
+### TDD Cycle Evidence
+| Tasks | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| 9.1–9.2 | `revocation.test.ts` / real-filesystem integration | `approval`, `abandon`, and `reconcile-walk`: 35/35 passing | New active and superseded revocation tests failed 2/2 with `revokeVersion: not yet implemented (lands in U9)`. | 2/2 passed after the minimum ordered D1c projection. | Active removal versus superseded-pointer preservation exercises distinct paths. | Clean; no behavior-preserving extraction needed. |
+| 9.3–9.4 | same / real-filesystem integration | 2/2 existing revocation tests passing | Added four crash rows; the two pending-replay rows failed because the same-key retry reached the domain's already-revoked refusal. The pre-step-1 and post-step-3 rows were already green through existing scan null-derivation and journal replay behavior. | 6/6 passed after D1c replay classification. | Four rows cover no artifact, pointer-plus-journal replay, journal-only replay, and converged completion. | Named `removedRevokedActivePointer` classification boolean; focused suite remained 6/6 green. |
+
+### Verification
+- `npx vitest run tests/adapters/fs-beacon-store/revocation.test.ts` → **1 file, 6 passed**, exit 0 (final focused run).
+- `npm run lint` → exit 0; only pre-existing `eslint-plugin-boundaries` deprecation warnings.
+- `npx tsc --noEmit` → exit 0.
+- `git diff --check` → exit 0.
+- Runtime harness: real `mkdtemp` project directories, `FsAtomicWriter`, and injected post-materialization crashes; no filesystem mocks.
+
+### Deviations / remaining work
+No design deviation. `recoverProject()` assembly, `RecoverAction` report types, and all recovery-method work remain untouched for U9b.
+
+Exact deferred task lines:
+- [ ] 9.5 RED: create `tests/adapters/fs-beacon-store/recover.test.ts` — a clean project (no interrupted transaction, no pending replay) calling `recoverProject()` any number of times creates neither `lock` nor `probe.tmp.<uuid>`, and no on-disk file is created, modified, or deleted, including the lock file (`beacon-store-recovery` R1 S1 and S3, both literal, byte-and-inode snapshot before/after); confirm it fails (no `recoverProject()` yet). <!-- sdd-owner: implementation -->
+- [ ] 9.6 GREEN: assemble `recoverProject()` on `FsBeaconStore` per D5b's two-phase design — phase 1 (lock-free `scan`, walking every unit's classification rows built in U5–U9 into one `RecoverReport`); phase 2 (`apply`, entered only if phase 1 proposed at least one action: acquire lock, re-scan under it as the authoritative pass, apply, release). Assemble the exported `ArtifactClass`, `ArtifactRef`, `RecoverAction`, `RecoverReport` types in `reconcile.ts` per D5b's interfaces (`Result`-wrapped for `LockUnavailable`). <!-- sdd-owner: implementation -->
+- [ ] 9.7 RED: extend `recover.test.ts` — a project holding each of the prior units' pending-replay states (D1e draft-mutation window from U6, D1b abandonment window from U7, D1 approval windows from U8, D1c revocation window from 9.3) converges after exactly one `recoverProject()` call: the first call performs only completion actions, the second performs none and changes no reconstructable on-disk content, and both reports describe an equivalent post-scan state (`beacon-store-recovery` R1 S2, literal — "equivalent", not byte-identical, since a swept temp is absent from the second report); confirm it fails before phase 2's re-scan-under-lock is wired. <!-- sdd-owner: implementation -->
+- [ ] 9.8 GREEN: confirm 9.7 passes against 9.6's assembly. <!-- sdd-owner: implementation -->
+- [ ] 9.9 RED→GREEN: add the leaked-temp sweep test (D5, D5b) — phase 1 proposes `swept-leaked-temp` unconditionally (no clock in the lock-free phase); phase 2, under the lock, sweeps only temps older than `staleAfterMs` by the D2 probe comparison; a temp younger than `staleAfterMs` causes phase 2 to re-enter and decline the sweep on every subsequent call until it ages out — explicitly excluded from the S2 convergence assertion per the amended spec. <!-- sdd-owner: implementation -->
+- [ ] 9.10 RED→GREEN: add an `unclassified` fixture test — an unrecognised on-disk combination (e.g. a draft or version directory with no `beacon.json`) is reported `unclassified` and left untouched; `recoverProject()` never throws (D1's "never throws" guarantee — contrast with `getBeacon`'s corruption throws from U5). <!-- sdd-owner: implementation -->
+- [ ] 9.11 Final verification: `npx vitest run tests/adapters/fs-beacon-store/{revocation,recover}.test.ts`; `npm run lint`; `npx tsc --noEmit`. <!-- sdd-owner: implementation -->
+
+### Workload, rollback, and status
+- **PR boundary**: stacked-to-main; U9a starts at D1c revocation and ends after its mutation-time replay only. U9b will assemble `recoverProject()` and was not started. Dependency: U8 approval/replay support. Follow-up: U9b tasks 9.5–9.11. `origin/master` → **📍 U9a** → U9b.
+- **Changed-line count from U9a base (`origin/master`) before this evidence append**: 101 additions + 8 deletions in tracked files, plus 151 lines in the new revocation test = **260 changed lines**. This evidence section remains within the 400-line slice cap; final count is remeasured below before handoff.
+- Rollback boundary: revert `revokeVersion`, the D1c reconciliation addition, `revocation.test.ts`, only persisted checkboxes `9.1`–`9.4`, and this U9a section; retain U1–U8 and do not touch U9b work.
+- Consumed authoritative `gentle-ai.sdd-status/v2`: change `fs-beacon-store`, OpenSpec store, `apply=ready`, `nextRecommended=apply`. Parent-enforced allowed surfaces superseded the native broad-root warning; every changed path is within them. Parent owns the opaque attempt token; no attempt lifecycle action, review, receipt, commit, push, or PR action was taken. The two pre-existing untracked `.gentle-ai-instance` files were not touched.

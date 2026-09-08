@@ -32,6 +32,7 @@ interface ManifestFile {
 interface RevocationFile {
   readonly previousStatus: "active" | "superseded";
   readonly revocation: RevocationRecord;
+  readonly idempotency?: DraftIdempotencyStamp;
 }
 
 interface ActiveFile {
@@ -436,6 +437,10 @@ function isApprovalMethod(value: string): value is "approveDraft" {
   return value === "approveDraft";
 }
 
+function isRevocationMethod(value: string): value is "revokeVersion" {
+  return value === "revokeVersion";
+}
+
 /**
  * D1e — the mutable-commit-point journal window. For each draft under
  * `beaconId` whose `draft.json` carries an idempotency stamp but whose
@@ -451,6 +456,44 @@ export async function applyPendingProjectDraftReplays(
 ): Promise<void> {
   for (const beaconId of await listBeaconIds(projectRoot)) {
     await applyPendingDraftReplays(projectRoot, beaconId, writer);
+  }
+}
+
+// D1c — revocation.json is the commit point. A missing journal proves
+// cleanup is pending: remove a stale active pointer only when it still names
+// the revoked version, then create the original journal entry.
+async function applyPendingRevocationReplays(
+  projectRoot: string,
+  beaconId: string,
+  writer: AtomicWriter,
+): Promise<void> {
+  const layout = createLayout(projectRoot);
+  for (const versionId of await listSorted(layout.versions(beaconId))) {
+    const revocation = await readRecord<RevocationFile>(
+      layout.revocation(beaconId, versionId), "revocation",
+    );
+    const stamp = revocation?.idempotency;
+    if (stamp === undefined || !isRevocationMethod(stamp.method)) continue;
+    if (await readJournalEntry(projectRoot, stamp.keyHash)) continue;
+
+    const active = await readRecord<ActiveFile>(layout.active(beaconId), "active");
+    const removedRevokedActivePointer = active?.activeVersionId === versionId;
+    if (removedRevokedActivePointer) {
+      await writer.removeAtomic(layout.active(beaconId));
+    }
+    await mkdir(layout.journalIdempotency(), { recursive: true });
+    await createJournalEntry(
+      projectRoot,
+      {
+        key: stamp.key,
+        keyHash: stamp.keyHash,
+        method: stamp.method,
+        beaconId,
+        inputHash: stamp.inputHash,
+        result: { beaconId, versionId, draftId: null, revision: null },
+      },
+      writer,
+    );
   }
 }
 
@@ -510,6 +553,7 @@ export async function applyPendingDraftReplays(
   writer: AtomicWriter,
 ): Promise<void> {
   const layout = createLayout(projectRoot);
+  await applyPendingRevocationReplays(projectRoot, beaconId, writer);
   await applyPendingApprovalReplay(projectRoot, beaconId, writer);
   const draftIds = await listSorted(layout.drafts(beaconId));
 
