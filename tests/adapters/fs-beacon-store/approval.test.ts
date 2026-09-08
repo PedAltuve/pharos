@@ -1,4 +1,4 @@
-import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 import { project } from "../../../src/domain/semantics/index.js";
 import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
+import { BeaconStoreCorruptionError } from "../../../src/adapters/fs-beacon-store/corruption.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { keyHash } from "../../../src/adapters/fs-beacon-store/journal.js";
 import {
@@ -289,5 +290,103 @@ describe("FsBeaconStore.approveDraft — commit point (fs-beacon-store R5 S3)", 
     expect(result).toMatchObject({ ok: true, value: { activeVersionId: "ver_1" } });
     expect(activeDuringWrite).toMatchObject({ ok: true, value: { versionId: "ver_1", status: "active" } });
     expect(writer.calls).toEqual([semantics, manifest, active, draft, expect.stringContaining(journal)]);
+  });
+});
+
+describe("FsBeaconStore.approveDraft — D6b adoption probe", () => {
+  async function crashAfterManifest(
+    draftId = "draft_1",
+    versionId = "ver_1",
+    key = "approve-key",
+    staleOriginAcknowledged = false,
+  ): Promise<void> {
+    const store = new FsBeaconStore({
+      projectRoot: projectDir,
+      hasher,
+      writer: new CrashAfterPathWriter("manifest.json"),
+    });
+    await seedOpenDraft(store, draftId);
+    await expect(store.approveDraft("bcn_1", approveCmd({
+      draftId, versionId, staleOriginAcknowledged,
+    }), key))
+      .rejects.toBeInstanceOf(InjectedCrash);
+  }
+
+  it("refuses a stale interrupted attempt after an unrelated approval, then permits a fresh version", async () => {
+    await crashAfterManifest("draft_1", "ver_1", "approve-key", true);
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store, "draft_2");
+    await expect(store.approveDraft("bcn_1", approveCmd({
+      draftId: "draft_2", versionId: "ver_2",
+    }), "other-key")).resolves.toMatchObject({ ok: true });
+
+    await expect(store.approveDraft("bcn_1", approveCmd({ staleOriginAcknowledged: true }), "approve-key"))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { rule: "stale-attempt-artifact", artifact: "manifest", ownerId: "ver_1" },
+      });
+    await expect(store.approveDraft("bcn_1", approveCmd({
+      versionId: "ver_3", staleOriginAcknowledged: true,
+    }), "fresh-key"))
+      .resolves.toMatchObject({ ok: true, value: { activeVersionId: "ver_3" } });
+  });
+
+  it("treats approved_revision as aggregate-derived when a same-content update intervenes", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    await store.updateDraft("bcn_1", { draftId: "draft_1", expectedRevision: 1, content: content("reviewed") }, "update-2");
+    await store.updateDraft("bcn_1", { draftId: "draft_1", expectedRevision: 2, content: content("reviewed") }, "update-3");
+    const crashingStore = new FsBeaconStore({
+      projectRoot: projectDir, hasher, writer: new CrashAfterPathWriter("manifest.json"),
+    });
+    await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .rejects.toBeInstanceOf(InjectedCrash);
+    await expect(readFile(join(
+      projectDir, "beacons", "bcn_1", "versions", "ver_1", "manifest.json"), "utf8",
+    )).resolves.toContain('"approved_revision": 3');
+    await store.updateDraft("bcn_1", { draftId: "draft_1", expectedRevision: 3, content: content("reviewed") }, "update-4");
+
+    await expect(store.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .resolves.toMatchObject({ ok: false, error: { rule: "stale-attempt-artifact" } });
+  });
+
+  it("adopts identical interrupted artifacts and completes the original approval exactly once", async () => {
+    await crashAfterManifest();
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+
+    await expect(store.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .resolves.toMatchObject({ ok: true, value: { activeVersionId: "ver_1" } });
+    expect(await readdir(join(projectDir, "beacons", "bcn_1", "versions"))).toEqual(["ver_1"]);
+    await expect(scanBeacon(projectDir, "bcn_1")).resolves.toMatchObject({
+      beacon: { drafts: { draft_1: { status: "closed" } } },
+    });
+  });
+
+  it("distinguishes same-key input conflicts from a corrupt input-determined manifest field", async () => {
+    await crashAfterManifest();
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await expect(store.approveDraft("bcn_1", approveCmd({ actor: "other" }), "approve-key"))
+      .resolves.toMatchObject({ ok: false, error: { rule: "idempotency-key-conflict" } });
+
+    const manifest = join(projectDir, "beacons", "bcn_1", "versions", "ver_1", "manifest.json");
+    await writeFile(manifest, (await readFile(manifest, "utf8")).replace('"actor": "operator"', '"actor": "tampered"'));
+    await expect(store.approveDraft("bcn_1", approveCmd(), "approve-key"))
+      .rejects.toBeInstanceOf(BeaconStoreCorruptionError);
+  });
+
+  it("refuses a different key's genuine second manifest write without changing its bytes", async () => {
+    await crashAfterManifest();
+    const manifest = join(projectDir, "beacons", "bcn_1", "versions", "ver_1", "manifest.json");
+    const semantics = join(projectDir, "beacons", "bcn_1", "versions", "ver_1", "semantics.json");
+    const original = await readFile(manifest, "utf8");
+    await rm(semantics);
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+
+    await expect(store.approveDraft("bcn_1", approveCmd(), "other-key"))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { rule: "immutable-file-exists", artifact: "manifest", ownerId: "ver_1" },
+      });
+    await expect(readFile(manifest, "utf8")).resolves.toBe(original);
   });
 });

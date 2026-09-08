@@ -779,3 +779,35 @@ The prior U8a note asking for a further split is superseded only for delivery pl
 - [ ] 8.15 RED: extend the test file — `fs-beacon-store` R3 S1, literal: a *genuine second write* to an existing `manifest.json` (a different transaction, different `key_hash`, targeting an existing version directory) returns a refusal and the original `manifest.json` bytes are unchanged; confirm it is distinguished from the adoption case in 8.14 (different `key_hash` → `immutable-file-exists`, not adopt). <!-- sdd-owner: implementation -->
 - [ ] 8.16 GREEN: confirm 8.15 passes against 8.12's probe. <!-- sdd-owner: implementation -->
 - [ ] 8.17 Final verification: `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts`; `npm run lint`; `npx tsc --noEmit`. If this unit's authored diff exceeds 400 lines, apply the pre-agreed relief order (i)/(ii) from the forecast, or record a `size:exception`. <!-- sdd-owner: implementation -->
+
+---
+
+## Work Unit U8b — D6b adoption and immutable-artifact refusals (tasks 8.11–8.17)
+
+**Status**: complete. Tasks `8.11`–`8.17` are visibly checked in persisted `tasks.md`. Strict TDD; current PR boundary is U8b only, stacked-to-main.
+
+### Completed tasks
+- [x] 8.11–8.12: implemented the pre-write D6b probe for `semantics.json` and `manifest.json`. It stamps semantics, partitions manifest fields exactly (`local_number`, `supersedes_version`, `approved_revision` aggregate-derived; all other specified fields input-determined), and returns write/adopt/conflict/stale/corruption/immutable outcomes before writes.
+- [x] 8.13: same-content revision 3→4 retry returns `stale-attempt-artifact`, not a throw.
+- [x] 8.14: an identical same-key retry adopts both artifacts and completes exactly one version.
+- [x] 8.15–8.16: a different key targeting the existing manifest returns `immutable-file-exists`; original manifest bytes remain unchanged.
+- [x] 8.17: focused test, lint, typecheck, and diff check passed.
+
+### TDD Cycle Evidence
+| Tasks | Test / layer | Safety net | RED | GREEN / triangulation | Refactor |
+|---|---|---|---|---|---|
+| 8.11–8.12 | `approval.test.ts` / real-filesystem integration | `6/6` focused passing | Added five D6b scenarios first; `11`-test RED run had four intended failures: stale attempt was a domain stale-origin refusal, approved revision/adoption/input conflict were immutable refusals. | `11/11` after field-partitioned probe. Covers ordinary absent write (existing R5 path), different key, same-key changed input, identical adoption, aggregate-derived stale, and input-determined corruption. | Extracted parse/stamp/partition helpers; reran focused suite green. |
+| 8.13–8.14 | same | `6/6` focused passing | Revision and identical-retry assertions failed before probe as immutable refusals. | Both real crash/retry paths pass, including one-version assertion. | Included in helper extraction above. |
+| 8.15–8.16 | same | `6/6` focused passing | Different-key existing-manifest assertion was written before the probe. | Immutable refusal and byte identity pass. | No further refactor needed. |
+| 8.17 | same | `11/11` focused passing | N/A — verification task. | `npx vitest run tests/adapters/fs-beacon-store/approval.test.ts` → 1 file, 11 passed; `npm run lint` → exit 0; `npx tsc --noEmit` → exit 0; `git diff --check` → exit 0. | N/A. |
+
+### Files and verification
+- Changed: `src/adapters/fs-beacon-store/fs-beacon-store.ts`; `tests/adapters/fs-beacon-store/approval.test.ts`; persisted task checkboxes `8.11`–`8.17`; this bounded section. `journal.ts` and `reconcile.ts` were not changed by U8b.
+- Runtime harness: real `mkdtemp` projects, `FsAtomicWriter`, and injected post-materialisation manifest crashes; no filesystem mocks. Full `npm test` after focused verification → 22 files, 253 passed.
+- Deviation: none. The semantic artifact now carries the D6b stamp via the approval projection so its entire projected body can participate in the pre-write comparison; no serializer file was widened.
+- Remaining delegated tasks: none. U9 and later task lines remain unchecked and are outside this authorized U8b boundary.
+
+### Workload / rollback / status
+- **Immutable-baseline correction:** against provider-owned U8a1/U8a2 tree `43fd702d11916b3a9ea4d0aa15c88ddc1b20bedd`, the current U8b code/test delta is `140 additions + 9 deletions` in `fs-beacon-store.ts` and `100 additions + 1 deletion` in `approval.test.ts`: **240 additions + 10 deletions = 250** changed lines. This supersedes the unreproducible 311-line attribution; U8b remains below the 400-line cap. No code-golfing or exception was used.
+- Rollback boundary: remove the D6b probe/stamped-semantics approval delta and the five U8b tests; revert only task checkboxes `8.11`–`8.17` and this section. Retain U8a1/U8a2.
+- Consumed authoritative `gentle-ai.sdd-status@2`: OpenSpec apply ready, repo-local workspace and allowed root `/home/pedro/pharos`; no action-context warnings. Parent-owned attempt authority was not acquired, reset, rescaled, or settled here.

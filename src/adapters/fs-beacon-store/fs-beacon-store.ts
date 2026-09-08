@@ -1,5 +1,6 @@
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AbandonDraftCommand,
   ActiveVersion,
@@ -14,7 +15,10 @@ import type {
   IdempotencyKey,
   StoreCreateDraftCommand,
 } from "../../domain/ports/beacon-store.js";
-import type { BeaconStoreRefusal } from "../../domain/ports/beacon-store-refusals.js";
+import type {
+  BeaconStoreRefusal,
+  ImmutableArtifact,
+} from "../../domain/ports/beacon-store-refusals.js";
 import {
   abandonDraft as domainAbandonDraft,
   approveDraft as domainApproveDraft,
@@ -61,6 +65,114 @@ function isMissing(error: unknown): boolean {
     && "code" in error
     && (error as NodeJS.ErrnoException).code === "ENOENT"
   );
+}
+
+interface IdempotencyStamp {
+  readonly key: string;
+  readonly keyHash: string;
+  readonly inputHash: string;
+  readonly method: "approveDraft";
+}
+
+type JsonRecord = Record<string, unknown>;
+type AdoptionOutcome = "write" | "adopt" | BeaconStoreRefusal;
+
+function recordOf(value: unknown, label: string): JsonRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new BeaconStoreCorruptionError(`${label} is not an object`);
+  }
+  return value as JsonRecord;
+}
+
+function parseArtifact(bytes: string, label: string): JsonRecord {
+  try {
+    return recordOf(JSON.parse(bytes) as unknown, label);
+  } catch (error) {
+    if (error instanceof BeaconStoreCorruptionError) throw error;
+    throw new BeaconStoreCorruptionError(`${label} is not valid JSON`);
+  }
+}
+
+function stampOf(record: JsonRecord, label: string): IdempotencyStamp {
+  const stamp = recordOf(record.idempotency, `${label} idempotency`);
+  if (
+    typeof stamp.key !== "string"
+    || typeof stamp.key_hash !== "string"
+    || typeof stamp.input_hash !== "string"
+    || stamp.method !== "approveDraft"
+  ) throw new BeaconStoreCorruptionError(`${label} has an invalid idempotency stamp`);
+  return {
+    key: stamp.key,
+    keyHash: stamp.key_hash,
+    inputHash: stamp.input_hash,
+    method: "approveDraft",
+  };
+}
+
+function manifestParts(record: JsonRecord): { input: JsonRecord; aggregate: JsonRecord } {
+  const { local_number: localNumber, supersedes_version: supersedesVersion, provenance, ...input } = record;
+  const { approved_revision: approvedRevision, ...inputProvenance } = recordOf(provenance, "manifest provenance");
+  return {
+    input: { ...input, provenance: inputProvenance },
+    aggregate: {
+      local_number: localNumber,
+      supersedes_version: supersedesVersion,
+      approved_revision: approvedRevision,
+    },
+  };
+}
+
+function stampedSemantics(bytes: string, stamp: IdempotencyStamp): string {
+  return JSON.stringify({
+    ...parseArtifact(bytes, "semantics"),
+    idempotency: {
+      key: stamp.key,
+      key_hash: stamp.keyHash,
+      input_hash: stamp.inputHash,
+      method: stamp.method,
+    },
+  }, null, 2) + "\n";
+}
+
+async function resolveAdoption(
+  path: string,
+  artifact: Extract<ImmutableArtifact, "semantics" | "manifest">,
+  expectedBytes: string,
+  stamp: IdempotencyStamp,
+  beaconId: string,
+  ownerId: string,
+): Promise<AdoptionOutcome> {
+  let storedBytes: string;
+  try {
+    storedBytes = await readFile(path, "utf8");
+  } catch (error) {
+    if (isMissing(error)) return "write";
+    throw error;
+  }
+  const stored = parseArtifact(storedBytes, artifact);
+  const storedStamp = stampOf(stored, artifact);
+  if (storedStamp.keyHash !== stamp.keyHash) {
+    return { rule: "immutable-file-exists", artifact, beaconId, ownerId };
+  }
+  if (storedStamp.inputHash !== stamp.inputHash) {
+    return {
+      rule: "idempotency-key-conflict",
+      key: stamp.key,
+      storedInputHash: storedStamp.inputHash,
+      requestedInputHash: stamp.inputHash,
+    };
+  }
+
+  const expected = parseArtifact(expectedBytes, artifact);
+  const storedParts = artifact === "manifest" ? manifestParts(stored) : { input: stored, aggregate: {} };
+  const expectedParts = artifact === "manifest" ? manifestParts(expected) : { input: expected, aggregate: {} };
+  if (!isDeepStrictEqual(storedParts.input, expectedParts.input)) {
+    throw new BeaconStoreCorruptionError(`${artifact} input-determined fields differ for an equal input`);
+  }
+  if (!isDeepStrictEqual(storedParts.aggregate, expectedParts.aggregate)) {
+    return { rule: "stale-attempt-artifact", artifact, beaconId, ownerId, key: stamp.key };
+  }
+  return "adopt";
 }
 
 // D3 — only genuine absence maps to `beacon-not-found`. Any other I/O
@@ -479,20 +591,39 @@ export class FsBeaconStore implements BeaconStore {
       if (draft === undefined || draft.status !== "closed" || version === undefined) {
         throw new Error(`approveDraft invariant violated for draft "${cmd.draftId}"`);
       }
+      const stamp: IdempotencyStamp = {
+        key, keyHash: hash, inputHash: requestedInputHash, method: "approveDraft",
+      };
       const semantics = layout.semantics(beaconId, cmd.versionId);
       const manifest = layout.manifest(beaconId, cmd.versionId);
-      await mkdir(dirname(semantics), { recursive: true });
-      if (await this.writer.createExclusive(semantics, serializeRecord("semantics", project(draft.content))) === "exists") {
-        return err({ rule: "immutable-file-exists", artifact: "semantics", beaconId, ownerId: cmd.versionId });
-      }
-      if (await this.writer.createExclusive(manifest, serializeRecord("manifest", {
+      const semanticsBytes = stampedSemantics(
+        serializeRecord("semantics", project(draft.content)), stamp,
+      );
+      const manifestBytes = serializeRecord("manifest", {
         versionId: version.versionId,
         localNumber: version.localNumber,
         approval: version.approval,
         provenance: version.provenance,
         supersedesVersion: beacon.activeVersionId,
-        idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "approveDraft" },
-      })) === "exists") {
+        idempotency: stamp,
+      });
+      const semanticsAdoption = await resolveAdoption(
+        semantics, "semantics", semanticsBytes, stamp, beaconId, cmd.versionId,
+      );
+      if (semanticsAdoption !== "write" && semanticsAdoption !== "adopt") {
+        return err(semanticsAdoption);
+      }
+      const manifestAdoption = await resolveAdoption(
+        manifest, "manifest", manifestBytes, stamp, beaconId, cmd.versionId,
+      );
+      if (manifestAdoption !== "write" && manifestAdoption !== "adopt") {
+        return err(manifestAdoption);
+      }
+      await mkdir(dirname(semantics), { recursive: true });
+      if (semanticsAdoption === "write" && await this.writer.createExclusive(semantics, semanticsBytes) === "exists") {
+        return err({ rule: "immutable-file-exists", artifact: "semantics", beaconId, ownerId: cmd.versionId });
+      }
+      if (manifestAdoption === "write" && await this.writer.createExclusive(manifest, manifestBytes) === "exists") {
         return err({ rule: "immutable-file-exists", artifact: "manifest", beaconId, ownerId: cmd.versionId });
       }
       await this.writeIntoDir(
