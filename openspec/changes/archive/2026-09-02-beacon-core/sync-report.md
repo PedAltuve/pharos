@@ -4,11 +4,11 @@
 **Change**: beacon-core  
 **Archive Phase**: Spec merge and main-spec updates
 
-## Summary
+## Historical Sync Snapshot (superseded)
 
-Three capability specs (two new, one delta) merged into main specs directory per hybrid-mode archive policy. Mechanical shell-based copy operations verified with zero-diff readback to ensure byte-identity.
+The 2026-09-02 operations below are preserved as historical evidence. Their pre-remediation counts are superseded by the final reconciliation; they do not describe the current verification totals or delivery state.
 
-## Operations Performed
+## Operations Performed (historical)
 
 ### 1. Create `openspec/specs/beacon-draft-lifecycle/spec.md`
 
@@ -90,12 +90,14 @@ $ diff -r openspec/changes/beacon-core/specs/beacon-version-lifecycle/spec.md op
 - Lines 49 and 60 edited in place
 - New scenario inserted at lines 64-70
 
-## Archive Readiness
+## Final Reconciliation (2026-09-09)
 
-✅ All specs merged into main specs directory  
-✅ Byte-identity confirmed for new specs  
-✅ Delta successfully applied to modified spec  
-✅ No gaps or missing requirements  
-✅ Future spec merges will follow the same pattern
+The historical sync snapshot above is superseded by final evidence:
 
-**Result**: Source of truth updated. Main specs now authoritative for all ratified Beacon Core behavior.
+- Final verification is PASS: 14/14 requirements, 25/25 scenarios, and 128/128 tests.
+- There are zero CRITICAL findings and zero delivery blockers.
+- Delivery PRs #6, #7, #8, #13, #14, #16, and #17 are merged; no remote `change/beacon-core-*` refs remain.
+- Stale force-push rows 8.10 and 16.6 are reconciled as obsolete/completed delivery work; this report does not claim a force-push occurred.
+- The change remains active pending a separate archive action; the intended archive destination does not yet exist.
+
+**Result**: Promoted specs remain the source of truth for ratified Beacon Core behavior; this report records final evidence without performing an archive move.
