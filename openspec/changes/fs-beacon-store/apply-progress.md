@@ -883,3 +883,53 @@ Exact deferred task lines:
 ### Evidence
 - Files: `fs-beacon-store.ts`, `reconcile.ts`, new `recover.test.ts`, tasks/progress; real `mkdtemp`/crash-writer/snapshot/`utimes` harness, no mocks. Focused suite: 2 files, 10 passed; lint/typecheck/diff-check exit 0 (lint has pre-existing boundaries deprecation warnings).
 - D5b lock-free scan re-scans under lock only when proposed work exists; `LockUnavailable` is a `Result`. U9b stacked-to-main rollback removes its recovery delta; no commit/review/lifecycle action. Acquisition-baseline incremental count: 397 additions+deletions. Status: authoritative `gentle-ai.sdd-status/v2`, `apply=ready`, `repo-local`; native actionContext warned that `/` was broader than task scope; parent-enforced narrow surfaces governed the run.
+
+---
+
+## Work Unit U10 — Contract, concurrency, and determinism sweep (PR 10)
+
+**Status**: complete. Persisted `tasks.md` checkboxes `10.1`–`10.8` are checked. No production changes were required.
+**Branch**: `feat/fs-beacon-store-u10`. **Mode**: Strict TDD. **Delivery boundary**: stacked-to-main PR 10, `ask-on-risk`, 400-line cap; no size exception.
+
+### Completed work
+- [x] 10.1–10.2 — added parameterised `BeaconStoreFactory` contract exercise, including all 3 reads, all 6 mutation replay/conflict cases, stale-revision binding, and tombstone fresh-key immutability behavior; instantiated against a fresh `mkdtemp` `FsBeaconStore`.
+- [x] 10.3–10.4 — added real-filesystem shared-writer concurrency proof: the first call is held at its draft write; the second emits no write before release, and its first write follows the first journal completion.
+- [x] 10.5–10.7 — added UTF-16 ordering, independent byte serialization, all-nine-method `project.json` preservation, and full create/update/fork/abandon/approve/revoke disk round-trip coverage.
+- [x] 10.8 — ran the required focused adapter/contract suite, lint, and typecheck.
+
+### Files changed
+- `tests/contract/beacon-store/fs-beacon-store.contract.test.ts` — shared factory contract and real adapter instantiation.
+- `tests/adapters/fs-beacon-store/concurrency.test.ts` — naive-unlocked counterexample and lock serialization integration test.
+- `tests/adapters/fs-beacon-store/determinism.test.ts` — ordering, byte stability, project boundary, and lifecycle round-trip integration tests.
+- `openspec/changes/fs-beacon-store/tasks.md` — only U10 checkboxes `10.1`–`10.8` checked.
+- `openspec/changes/fs-beacon-store/apply-progress.md` — this append.
+
+### TDD Cycle Evidence
+| Tasks | Layer | RED | GREEN / triangulation / refactor |
+|---|---|---|---|
+| 10.1–10.2 | Contract + real FS integration | Wrong-shaped stub returned `{ ok: true, value: null }` for `getBeacon`; the shared not-found assertion rejected it and the enclosing assertion verified that rejection (`1 passed`). | Fresh `mkdtemp` `FsBeaconStore` then passed the identical contract (`2 passed`). Six independent mutation replay/conflict inputs plus stale revision and fresh-key abandoned draft triangulate the contract. |
+| 10.3–10.4 | Integration (real fs/lock) | The naive unlocked two-call schedule produced `start:two` before `end:one`; the serialization predicate was false as required. | Wired store: `2 passed`; shared `AtomicWriter` event trace proves no second draft write while the first is gated and first journal completion precedes second mutation. Refactor replaced a microtask-only wait that starved filesystem I/O (initial focused run timed out) with bounded 1ms timer polling; re-run passed. |
+| 10.5–10.7 | Integration (real fs) | Counterfactual locale ordering was `bcn_a,bcn_Z`, not the required UTF-16 `bcn_Z,bcn_a` (`passes:false`). | `3 passed`: listing and committed roots use UTF-16 order; two independent lifecycle trees are byte-identical; lifecycle round-trip and `project.json` equality pass. No ordering/serialization gap surfaced; no production fix. |
+
+### Verification
+- `npx vitest run tests/contract/beacon-store/ tests/adapters/fs-beacon-store/` → exit 0, **16 files / 138 tests passed**.
+- `npm run lint` → exit 0; only pre-existing `eslint-plugin-boundaries` deprecation warnings.
+- `npx tsc --noEmit` → exit 0.
+- `git diff --check` → exit 0.
+- The final typecheck initially exposed a test-helper `TS2345` after the manifest-immutability case was added; its argument type was corrected and the complete command sequence above was re-run green.
+- Native settlement/process evidence: no commit, push, PR, review actor, token operation, or lifecycle gate was run. The timed-out test process was gone before retry; the one orphaned `/tmp/pharos-concurrency-*` and the earlier `/tmp/pharos-determinism-*` directory were removed; final test cleanup was verified.
+
+### Deviations and risks
+No design deviation and no production ordering/serialization defect. Action context consumed: `repo-local`, workspace `/home/pedro/pharos`, and the effective U10 fence; neither forbidden `.gentle-ai-instance` file was touched. The current branch is the assigned U10 branch. Workload: final U10 candidate is **303 additions+deletions** (237 new test lines + 50 progress additions + 16 checkbox changes), under the 400-line cap.
+
+### Remaining tasks
+No U10 task remains. Exact persisted unchecked implementation rows are future U11 scope (not started here):
+- [ ] 11.1 From a clean dependency state, run `npm ci`, then `npm test`, `npm run test:watch -- --run`, `npm run build`, `npm run lint`, `npm run typecheck`; record each exit result. <!-- sdd-owner: implementation -->
+- [ ] 11.2 Re-run the required-base diff check against the pre-Slice-D commit for `src/domain/beacon/`, `src/domain/semantics/`, `src/domain/ports/hasher.ts`, `src/domain/ports/json-value.ts`, `src/adapters/hashing/`; confirm zero diff (Slices A–C untouched). <!-- sdd-owner: implementation -->
+- [ ] 11.3 Confirm `tests/architecture/boundaries.test.ts` still passes and `src/adapters/fs-beacon-store/**` imports only `node:*` builtins plus relative domain/shared paths (no new production dependency — **G6**). <!-- sdd-owner: implementation -->
+- [ ] 11.4 Confirm every `proposal.md` (read-only) Success Criterion is met; record each unit's authored-line count (additions+deletions) against the reconciled forecast table above, flagging any unit that exceeded 400 lines for a `size:exception` note or the pre-agreed relief order. <!-- sdd-owner: implementation -->
+- [ ] 11.5 Confirm per-unit rollback in reverse order (U10 → U9 → … → U1) restores `src/adapters/fs-beacon-store/index.ts` to `export {};`, removes `src/domain/ports/beacon-store*.ts`, and reverts the ports barrel — per the proposal's whole-slice rollback plan. <!-- sdd-owner: implementation -->
+- [ ] 11.6 Confirm all 25 scenarios across the three specs (`beacon-store-port` 7, `fs-beacon-store` 11, `beacon-store-recovery` 7) are each covered by at least one passing test, using this file's "Maps to" lines per phase as the traceability index. <!-- sdd-owner: implementation -->
+
+### Status consumed
+`gentle-ai.sdd-status` v2: `changeName=fs-beacon-store`, authoritative `artifactStore=openspec`, `applyState=ready`, `nextRecommended=apply`, `nextWorkUnit=U10`; action context was safe and scoped as above. Implementation completion returns control to parent lifecycle; do not start U11 in this work unit.
