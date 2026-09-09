@@ -520,6 +520,13 @@ per the delivery discipline in this run's instructions.
   been force-pushed; all local rebuilt tips are ahead of their
   `origin/change/beacon-core-*` remotes.
 
-`state.yaml` phase statuses are intentionally left untouched by this apply
-run; `apply.status` ownership remains with the orchestrator, which settles
-after this run.
+## Delivery reconciliation (2026-09-09)
+
+The delivery-deferral statements above are historical snapshots superseded by
+final evidence: PRs #6, #7, #8, #13, #14, #16, and #17 are merged, and no
+remote `change/beacon-core-*` refs remain. Final verification reconciled 14/14
+requirements, 25/25 scenarios, and 128/128 tests, with zero blockers and zero
+CRITICAL findings. Tasks 8.10 and 16.6 are therefore reconciled as
+obsolete/completed delivery work; no force-push is claimed.
+This note records no new implementation or test evidence, and the active
+change folder remains pending a separate archive action.

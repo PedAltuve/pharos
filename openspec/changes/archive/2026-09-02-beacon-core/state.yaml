@@ -266,22 +266,31 @@ phases:
     status: done
     artifacts:
       openspec:
+        - openspec/changes/archive/2026-09-02-beacon-core/proposal.md
+        - openspec/changes/archive/2026-09-02-beacon-core/specs/beacon-draft-lifecycle/spec.md
+        - openspec/changes/archive/2026-09-02-beacon-core/specs/beacon-version-lifecycle/spec.md
+        - openspec/changes/archive/2026-09-02-beacon-core/specs/project-toolchain/spec.md
+        - openspec/changes/archive/2026-09-02-beacon-core/design.md
+        - openspec/changes/archive/2026-09-02-beacon-core/tasks.md
+        - openspec/changes/archive/2026-09-02-beacon-core/apply-progress.md
+        - openspec/changes/archive/2026-09-02-beacon-core/verify-report.md
+        - openspec/changes/archive/2026-09-02-beacon-core/sync-report.md
+        - openspec/changes/archive/2026-09-02-beacon-core/state.yaml
+        - openspec/changes/archive/2026-09-02-beacon-core/archive-report.md
+        - openspec/changes/archive/2026-09-02-beacon-core/.gentle-ai-instance
+      canonical:
         - openspec/specs/beacon-draft-lifecycle/spec.md
         - openspec/specs/beacon-version-lifecycle/spec.md
         - openspec/specs/project-toolchain/spec.md
-        - openspec/changes/beacon-core/archive-report.md
-        - openspec/changes/beacon-core/sync-report.md
-      engram: sdd/beacon-core/archive-report
     summary: >
-      Spec deltas merged into main specs (2 new, 1 modified). Archive folder
-      move pending-delivery per operator workflow: openspec/changes/beacon-core/
-      retained in active directory; operator will move to archive/2026-09-02-beacon-core/
-      as part of final chore commit. All 61 tasks complete. Verify PASS (117/117 tests,
-      0 CRITICAL). 6 chained PRs stacked to master 582fc1f, ready for operator delivery.
-    folder_move_status: pending-delivery
+      Spec deltas were already synced (2 new, 1 modified). Final verification
+      is PASS: 14/14 requirements, 25/25 scenarios, 128/128 tests, and 0
+      blockers or CRITICAL findings. Tasks are 109/109 complete. The complete
+      change directory, including its provider metadata, was moved to
+      openspec/changes/archive/2026-09-02-beacon-core/.
+    folder_move_status: archived
+    archived_path: openspec/changes/archive/2026-09-02-beacon-core/
     note: >
-      This change follows hybrid-mode archive policy: spec syncs completed and
-      committed to openspec/ immediately; folder move deferred to operator-owned
-      delivery commit per Slice A precedent. Archive report and traceability
-      recorded in both openspec/changes/beacon-core/ and Engram
-      (sdd/beacon-core/archive-report).
+      Archive completed in authoritative file-backed OpenSpec mode. No
+      archive-time sync fallback, destructive canonical merge, commit, push,
+      PR, or review actor was performed.
