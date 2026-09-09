@@ -933,3 +933,71 @@ No U10 task remains. Exact persisted unchecked implementation rows are future U1
 
 ### Status consumed
 `gentle-ai.sdd-status` v2: `changeName=fs-beacon-store`, authoritative `artifactStore=openspec`, `applyState=ready`, `nextRecommended=apply`, `nextWorkUnit=U10`; action context was safe and scoped as above. Implementation completion returns control to parent lifecycle; do not start U11 in this work unit.
+
+---
+
+## Work Unit U11 — Final verification evidence closure
+
+**Status**: complete. Persisted `tasks.md` checkboxes `11.1`–`11.6` are checked. Strict TDD verification-only unit: no production or test file was edited, no TDD RED/GREEN cycle was owed, and no verify report, receipt, review, commit, push, or attempt lifecycle action was performed.
+
+### 11.1 Command evidence
+
+| Command | Exit | Result |
+|---|---:|---|
+| `npm ci` | 0 | 183 packages installed; 0 vulnerabilities |
+| `npm test` | 0 | 27 files, 270 tests passed |
+| `npm run test:watch -- --run` | 0 | 27 files, 270 tests passed |
+| `npm run build` | 0 | `tsc -p tsconfig.build.json` passed |
+| `npm run lint` | 0 | passed; pre-existing boundaries deprecation warnings only |
+| `npm run typecheck` | 0 | `tsc --noEmit` passed |
+
+### 11.2–11.5 evidence
+
+- Required base is `ca9e385` (parent of Slice-D planning commit `e370433` through `7a6594a`); `git diff --exit-code ca9e385..HEAD --` the five protected paths exited 0.
+- `npx vitest run tests/architecture/boundaries.test.ts` exited 0 (1 file, 4 tests). All fs-adapter import specifiers are `node:*` or relative; scan found 0 non-relative/non-builtin imports. `package.json` has exactly `canonicalize@2.1.0`; no `package.json`/lockfile Slice-D diff.
+- All proposal Success Criteria are met by the passing suite: port boundary; full lifecycle disk round-trip; immutable manifest/tombstone refusals; before/after-swap crash recovery; replay/conflict; locking; shared contract suite; and one production dependency.
+- Reconciled delivery accounting: U1 284; U2 286; U3 438 source/test (538 including evidence, operator-approved `size:exception` cap 550); U4 split 238/377/358/299; U5 split 208/398/327/144 plus 197/366 corrections (the original 436 slice was ratified into 327+144); U6 split 351/233/213 plus 213/180 corrections; U7a/U7b 321/358; U8a1/U8a2/U8b 280/248/296; U9a/U9b 303/397; U10 303. All delivered slices are at or below 400 except the disclosed U3 exception.
+- Read-only history/tree proof: `ca9e385` is an ancestor; its fs index is `export {};`, has no `beacon-store*` port paths, and its ports barrel exports only `Hasher`/`JsonValue`. The reverse diff `HEAD → ca9e385` deletes both port files and restores those two files, proving reverse-order U10→U1 rollback.
+
+### 11.6 Scenario trace (all listed tests passed in `npm test`)
+
+| Spec scenario | Passing test |
+|---|---|
+| port R1 S1 | `boundaries`: zero Node imports |
+| port R1 S2 | `boundaries`: exactly 9 lifecycle methods |
+| port R2 S1 | contract: Fs store fresh project/replay |
+| port R2 S2 | contract: Fs store fresh project/conflict |
+| port R3 S1 | `lock`: bounded refusal for remote live lock |
+| port R3 S2 | `read`: absent beacon returns `beacon-not-found` |
+| port R4 S1 | `draft-writes`: stale revision leaves disk unchanged |
+| fs R1 S1 | `determinism`: byte-identical lifecycle round-trip |
+| fs R1 S2 | `determinism`: `project.json` unchanged across 9 methods |
+| fs R2 S1 | `atomic-writer`: crash before rename leaves no final partial file |
+| fs R3 S1 | `approval`: genuine second manifest write preserves bytes |
+| fs R3 S2 | `abandon`: fresh-key second abandonment preserves tombstone |
+| fs R4 S1 | `concurrency`: first full write completes before second begins |
+| fs R4 S2 | `lock`: confirmed-dead same-host lock breaks immediately |
+| fs R4 S3 | `lock`: current live lock is not broken |
+| fs R5 S1 | `approval`: stale reviewed hash writes no version artifact |
+| fs R5 S2 | `approval`: before-swap crash leaves aborted inactive orphan |
+| fs R5 S3 | `approval`: `active.json` is observable commit point |
+| recovery R1 S1 | `recover`: repeatable clean-project no-op |
+| recovery R1 S2 | `recover`: all U6–U9 replay windows converge |
+| recovery R1 S3 | `recover`: clean run creates neither lock nor probe |
+| recovery R2 S1 | `reconcile-walk`: before-swap version classified orphan |
+| recovery R2 S2 | `approval`: later approval does not resurrect orphan |
+| recovery R3 S1 | `approval`: after-swap replay closes and journals once |
+| recovery R3 S2 | `approval`: completed replay writes only once |
+
+### TDD Cycle Evidence
+
+| Tasks | Layer | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|
+| 11.1–11.6 | Verification/evidence | N/A — no code or tests may be edited | 270/270 suite plus all required commands passed | N/A | N/A |
+
+### Boundary, cleanup, and status
+
+- Changed paths: only `openspec/changes/fs-beacon-store/tasks.md` and `openspec/changes/fs-beacon-store/apply-progress.md`; U11 evidence is under the 400-line cap. `HEAD` verified before evidence writes: `08b8c6c660f7f30dbaca6a3c4ee8fe8448811c98`.
+- Process/cleanup: no completed Vitest process or `/tmp/pharos-*`/`/tmp/vitest-*` directory remained after checks. The two pre-existing untracked `.gentle-ai-instance` files were not touched.
+- Consumed authoritative status: `gentle-ai.sdd-status` v2, OpenSpec, `applyState=ready`, repo-local `/home/pedro/pharos`; writes obeyed the effective task fence. Parent owns attempt settlement; no token was acquired, settled, reset, rescaled, or persisted.
+- Remaining unchecked implementation tasks: none.
