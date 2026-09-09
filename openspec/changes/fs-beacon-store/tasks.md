@@ -246,12 +246,12 @@ Maps to: every `beacon-store-port` requirement, reasserted generically; `fs-beac
 
 ## Phase 11: Overall Final Verification (sequential, after U1–U10 all land)
 
-- [ ] 11.1 From a clean dependency state, run `npm ci`, then `npm test`, `npm run test:watch -- --run`, `npm run build`, `npm run lint`, `npm run typecheck`; record each exit result. <!-- sdd-owner: implementation -->
-- [ ] 11.2 Re-run the required-base diff check against the pre-Slice-D commit for `src/domain/beacon/`, `src/domain/semantics/`, `src/domain/ports/hasher.ts`, `src/domain/ports/json-value.ts`, `src/adapters/hashing/`; confirm zero diff (Slices A–C untouched). <!-- sdd-owner: implementation -->
-- [ ] 11.3 Confirm `tests/architecture/boundaries.test.ts` still passes and `src/adapters/fs-beacon-store/**` imports only `node:*` builtins plus relative domain/shared paths (no new production dependency — **G6**). <!-- sdd-owner: implementation -->
-- [ ] 11.4 Confirm every `proposal.md` (read-only) Success Criterion is met; record each unit's authored-line count (additions+deletions) against the reconciled forecast table above, flagging any unit that exceeded 400 lines for a `size:exception` note or the pre-agreed relief order. <!-- sdd-owner: implementation -->
-- [ ] 11.5 Confirm per-unit rollback in reverse order (U10 → U9 → … → U1) restores `src/adapters/fs-beacon-store/index.ts` to `export {};`, removes `src/domain/ports/beacon-store*.ts`, and reverts the ports barrel — per the proposal's whole-slice rollback plan. <!-- sdd-owner: implementation -->
-- [ ] 11.6 Confirm all 25 scenarios across the three specs (`beacon-store-port` 7, `fs-beacon-store` 11, `beacon-store-recovery` 7) are each covered by at least one passing test, using this file's "Maps to" lines per phase as the traceability index. <!-- sdd-owner: implementation -->
+- [x] 11.1 From a clean dependency state, run `npm ci`, then `npm test`, `npm run test:watch -- --run`, `npm run build`, `npm run lint`, `npm run typecheck`; record each exit result. <!-- sdd-owner: implementation -->
+- [x] 11.2 Re-run the required-base diff check against the pre-Slice-D commit for `src/domain/beacon/`, `src/domain/semantics/`, `src/domain/ports/hasher.ts`, `src/domain/ports/json-value.ts`, `src/adapters/hashing/`; confirm zero diff (Slices A–C untouched). <!-- sdd-owner: implementation -->
+- [x] 11.3 Confirm `tests/architecture/boundaries.test.ts` still passes and `src/adapters/fs-beacon-store/**` imports only `node:*` builtins plus relative domain/shared paths (no new production dependency — **G6**). <!-- sdd-owner: implementation -->
+- [x] 11.4 Confirm every `proposal.md` (read-only) Success Criterion is met; record each unit's authored-line count (additions+deletions) against the reconciled forecast table above, flagging any unit that exceeded 400 lines for a `size:exception` note or the pre-agreed relief order. <!-- sdd-owner: implementation -->
+- [x] 11.5 Confirm per-unit rollback in reverse order (U10 → U9 → … → U1) restores `src/adapters/fs-beacon-store/index.ts` to `export {};`, removes `src/domain/ports/beacon-store*.ts`, and reverts the ports barrel — per the proposal's whole-slice rollback plan. <!-- sdd-owner: implementation -->
+- [x] 11.6 Confirm all 25 scenarios across the three specs (`beacon-store-port` 7, `fs-beacon-store` 11, `beacon-store-recovery` 7) are each covered by at least one passing test, using this file's "Maps to" lines per phase as the traceability index. <!-- sdd-owner: implementation -->
 
 ## Delivery boundary
 
