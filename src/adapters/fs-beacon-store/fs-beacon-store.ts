@@ -18,12 +18,14 @@ import type {
 import type {
   BeaconStoreRefusal,
   ImmutableArtifact,
+  LockUnavailable,
 } from "../../domain/ports/beacon-store-refusals.js";
 import {
   abandonDraft as domainAbandonDraft,
   approveDraft as domainApproveDraft,
   createDraft as domainCreateDraft,
   forkDraft as domainForkDraft,
+  revokeVersion as domainRevokeVersion,
   resolveActiveVersion,
   updateDraft as domainUpdateDraft,
 } from "../../domain/beacon/index.js";
@@ -42,13 +44,21 @@ import {
   inputHash,
   keyHash,
   lookupJournal,
+  revokeVersionInput,
   updateDraftInput,
 } from "./journal.js";
 import type { JournalMethod, JournalResult } from "./journal.js";
 import { classifyId, createLayout } from "./layout.js";
 import { ProjectLock } from "./lock.js";
 import { getOwn } from "./records.js";
-import { applyPendingProjectDraftReplays, listBeaconIds, scanBeacon } from "./reconcile.js";
+import {
+  applyPendingProjectDraftReplays,
+  applyRecovery,
+  listBeaconIds,
+  scanBeacon,
+  scanRecovery,
+  type RecoverReport,
+} from "./reconcile.js";
 import { BeaconStoreCorruptionError } from "./corruption.js";
 import { serializeRecord } from "./serialization.js";
 
@@ -646,14 +656,80 @@ export class FsBeaconStore implements BeaconStore {
     }
   }
 
+  async recoverProject(): Promise<Result<RecoverReport, LockUnavailable>> {
+    const report = await scanRecovery(this.projectRoot);
+    if (report.actions.length === 0) return ok(report);
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      const authoritative = await scanRecovery(this.projectRoot);
+      if (authoritative.actions.length > 0) {
+        await applyRecovery(this.projectRoot, this.writer, authoritative, this.lock.staleAfterMs);
+      }
+      const postScan = await scanRecovery(this.projectRoot);
+      return ok({ artifacts: postScan.artifacts, actions: authoritative.actions });
+    } finally {
+      await this.lock.release();
+    }
+  }
+
   async revokeVersion(
     beaconId: string,
     cmd: RevokeVersionCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>> {
-    void beaconId;
-    void cmd;
-    void key;
-    throw new Error("revokeVersion: not yet implemented (lands in U9)");
+    if (classifyId(beaconId, "existing") !== "valid") {
+      return err({ rule: "beacon-not-found", beaconId });
+    }
+    if (classifyId(cmd.versionId, "existing") !== "valid") {
+      return err({ rule: "version-not-found", versionId: cmd.versionId });
+    }
+
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return err(acquired.error);
+    try {
+      await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
+      const hash = keyHash(key);
+      const requestedInputHash = inputHash(revokeVersionInput(beaconId, cmd), this.hasher);
+      const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
+      if (replayed !== undefined) return replayed;
+
+      const layout = createLayout(this.projectRoot);
+      if (!(await pathExists(layout.beaconRecord(beaconId)))) {
+        return err({ rule: "beacon-not-found", beaconId });
+      }
+      const { beacon } = await scanBeacon(this.projectRoot, beaconId);
+      const mutated = domainRevokeVersion(beacon, cmd);
+      if (!mutated.ok) return mutated;
+
+      const version = getOwn(mutated.value.versions, cmd.versionId);
+      if (version === undefined || version.status !== "revoked") {
+        throw new Error(`revokeVersion invariant violated for version "${cmd.versionId}"`);
+      }
+      await mkdir(dirname(layout.revocation(beaconId, cmd.versionId)), { recursive: true });
+      const created = await this.writer.createExclusive(
+        layout.revocation(beaconId, cmd.versionId),
+        serializeRecord("revocation", {
+          previousStatus: version.previousStatus,
+          revocation: version.revocation,
+          idempotency: { key, keyHash: hash, inputHash: requestedInputHash, method: "revokeVersion" },
+        }),
+      );
+      if (created === "exists") {
+        return err({
+          rule: "immutable-file-exists", artifact: "revocation", beaconId, ownerId: cmd.versionId,
+        });
+      }
+      if (beacon.activeVersionId === cmd.versionId) {
+        await this.writer.removeAtomic(layout.active(beaconId));
+      }
+      await this.recordJournalEntry(key, hash, "revokeVersion", beaconId, requestedInputHash, {
+        beaconId, versionId: cmd.versionId, draftId: null, revision: null,
+      });
+      return mutated;
+    } finally {
+      await this.lock.release();
+    }
   }
 }

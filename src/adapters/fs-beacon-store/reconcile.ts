@@ -1,5 +1,7 @@
 import type { Dirent } from "node:fs";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { open, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname, join, relative } from "node:path";
 import type { Beacon, Draft, DraftOrigin, RevocationRecord, Version } from "../../domain/beacon/index.js";
 import type { SemanticSource } from "../../domain/semantics/index.js";
 import type { AtomicWriter } from "./atomic-writer.js";
@@ -32,6 +34,7 @@ interface ManifestFile {
 interface RevocationFile {
   readonly previousStatus: "active" | "superseded";
   readonly revocation: RevocationRecord;
+  readonly idempotency?: DraftIdempotencyStamp;
 }
 
 interface ActiveFile {
@@ -75,6 +78,121 @@ interface DraftFile {
   readonly approvedVersionId?: string;
   readonly closedAt?: string;
   readonly idempotency?: DraftIdempotencyStamp;
+}
+
+export type ArtifactClass = "aborted" | "complete" | "unclassified" | "leaked-temp";
+
+export type ArtifactRef =
+  | { readonly scope: "version"; readonly beaconId: string; readonly versionId: string }
+  | { readonly scope: "draft"; readonly beaconId: string; readonly draftId: string }
+  | { readonly scope: "beacon"; readonly beaconId: string }
+  | { readonly scope: "project"; readonly relativePath: string };
+
+export type RecoverAction =
+  | "closed-draft"
+  | "wrote-journal-entry"
+  | "removed-abandoned-draft-file"
+  | "removed-revoked-active-pointer"
+  | "swept-leaked-temp";
+
+export interface RecoverReport {
+  readonly artifacts: readonly {
+    readonly ref: ArtifactRef;
+    readonly classification: ArtifactClass;
+    readonly reason: string;
+  }[];
+  readonly actions: readonly {
+    readonly ref: ArtifactRef;
+    readonly action: RecoverAction;
+  }[];
+}
+
+export async function scanRecovery(projectRoot: string): Promise<RecoverReport> {
+  const artifacts: RecoverReport["artifacts"][number][] = [];
+  const actions: RecoverReport["actions"][number][] = [];
+  const actionKeys = new Set<string>();
+  const propose = (ref: ArtifactRef, action: RecoverAction): void => {
+    const key = `${JSON.stringify(ref)}:${action}`;
+    if (!actionKeys.has(key)) {
+      actionKeys.add(key);
+      actions.push({ ref, action });
+    }
+  };
+
+  try {
+    for (const beaconId of await listBeaconIds(projectRoot)) {
+      const layout = createLayout(projectRoot);
+      const beaconRef: ArtifactRef = { scope: "beacon", beaconId };
+      try {
+        if (await readRecord<BeaconRecordFile>(layout.beaconRecord(beaconId), "beacon") === undefined) {
+          artifacts.push({ ref: beaconRef, classification: "unclassified", reason: "beacon.json is missing" });
+          continue;
+        }
+        const versions = await scanVersions(projectRoot, beaconId);
+        for (const versionId of versions.orphanVersionIds) {
+          artifacts.push({
+            ref: { scope: "version", beaconId, versionId },
+            classification: "aborted",
+            reason: "version is outside the committed chain",
+          });
+        }
+        for (const versionId of await listSorted(layout.versions(beaconId))) {
+          const ref: ArtifactRef = { scope: "version", beaconId, versionId };
+          const manifest = await readRecord<ManifestFile>(layout.manifest(beaconId, versionId), "manifest");
+          const revocation = await readRecord<RevocationFile>(layout.revocation(beaconId, versionId), "revocation");
+          if (revocation?.idempotency !== undefined
+            && isRevocationMethod(revocation.idempotency.method)
+            && await readJournalEntry(projectRoot, revocation.idempotency.keyHash) === undefined) {
+            const active = await readRecord<ActiveFile>(layout.active(beaconId), "active");
+            if (active?.activeVersionId === versionId) propose(ref, "removed-revoked-active-pointer");
+            propose(ref, "wrote-journal-entry");
+          }
+          if (versions.activeVersionId === versionId
+            && manifest?.idempotency !== undefined
+            && isApprovalMethod(manifest.idempotency.method)
+            && await readJournalEntry(projectRoot, manifest.idempotency.keyHash) === undefined) {
+            const draft = await readRecord<DraftFile>(
+              layout.draftRecord(beaconId, manifest.provenance.approvedDraftId), "draft",
+            );
+            if (draft?.status === "open") propose(ref, "closed-draft");
+            propose(ref, "wrote-journal-entry");
+          }
+        }
+        for (const draftId of await listSorted(layout.drafts(beaconId))) {
+          const ref: ArtifactRef = { scope: "draft", beaconId, draftId };
+          const tombstone = await readRecord<TombstoneFile>(layout.tombstone(beaconId, draftId), "tombstone");
+          const draft = await readRecord<DraftFile>(layout.draftRecord(beaconId, draftId), "draft");
+          const stamp = tombstone?.idempotency ?? draft?.idempotency;
+          if (stamp === undefined || await readJournalEntry(projectRoot, stamp.keyHash) !== undefined) continue;
+          if (tombstone !== undefined && isAbandonmentMethod(stamp.method) && draft !== undefined) {
+            propose(ref, "removed-abandoned-draft-file");
+          }
+          if ((tombstone !== undefined && isAbandonmentMethod(stamp.method))
+            || (draft !== undefined && isDraftWindowMethod(stamp.method))) {
+            propose(ref, "wrote-journal-entry");
+          }
+        }
+      } catch (error) {
+        artifacts.push({
+          ref: beaconRef,
+          classification: "unclassified",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    for (const path of await listLeakedTemps(projectRoot)) {
+      const ref: ArtifactRef = { scope: "project", relativePath: relative(projectRoot, path) };
+      artifacts.push({ ref, classification: "leaked-temp", reason: "interrupted atomic write temp" });
+      propose(ref, "swept-leaked-temp");
+    }
+  } catch (error) {
+    artifacts.push({
+      ref: { scope: "project", relativePath: "." },
+      classification: "unclassified",
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return { artifacts, actions };
 }
 
 export interface VersionScan {
@@ -422,6 +540,58 @@ export async function listBeaconIds(projectRoot: string): Promise<string[]> {
   return beaconIds;
 }
 
+async function listLeakedTemps(root: string): Promise<string[]> {
+  const paths: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return paths;
+    throw error;
+  }
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.name.includes(".tmp.")) {
+      paths.push(path);
+    } else if (entry.isDirectory()) {
+      paths.push(...await listLeakedTemps(path));
+    }
+  }
+  return paths.sort();
+}
+
+async function isOldEnough(
+  path: string,
+  staleAfterMs: number,
+  writer: AtomicWriter,
+): Promise<boolean> {
+  const probePath = join(dirname(path), `probe.tmp.${randomUUID()}`);
+  const probe = await open(probePath, "wx");
+  await probe.close();
+  try {
+    const [temp, probeStat] = await Promise.all([stat(path), stat(probePath)]);
+    return temp.mtimeMs + staleAfterMs <= probeStat.mtimeMs;
+  } finally {
+    await writer.removeAtomic(probePath);
+  }
+}
+
+export async function applyRecovery(
+  projectRoot: string,
+  writer: AtomicWriter,
+  report: RecoverReport,
+  staleAfterMs: number,
+): Promise<void> {
+  if (report.actions.some(({ action }) => action !== "swept-leaked-temp")) {
+    await applyPendingProjectDraftReplays(projectRoot, writer);
+  }
+  for (const { ref, action } of report.actions) {
+    if (action !== "swept-leaked-temp" || ref.scope !== "project") continue;
+    const path = join(projectRoot, ref.relativePath);
+    if (await isOldEnough(path, staleAfterMs, writer)) await writer.removeAtomic(path);
+  }
+}
+
 const DRAFT_WINDOW_METHODS: ReadonlySet<string> = new Set(["createDraft", "updateDraft", "forkDraft"]);
 
 function isDraftWindowMethod(value: string): value is JournalMethod {
@@ -434,6 +604,10 @@ function isAbandonmentMethod(value: string): value is "abandonDraft" {
 
 function isApprovalMethod(value: string): value is "approveDraft" {
   return value === "approveDraft";
+}
+
+function isRevocationMethod(value: string): value is "revokeVersion" {
+  return value === "revokeVersion";
 }
 
 /**
@@ -451,6 +625,44 @@ export async function applyPendingProjectDraftReplays(
 ): Promise<void> {
   for (const beaconId of await listBeaconIds(projectRoot)) {
     await applyPendingDraftReplays(projectRoot, beaconId, writer);
+  }
+}
+
+// D1c — revocation.json is the commit point. A missing journal proves
+// cleanup is pending: remove a stale active pointer only when it still names
+// the revoked version, then create the original journal entry.
+async function applyPendingRevocationReplays(
+  projectRoot: string,
+  beaconId: string,
+  writer: AtomicWriter,
+): Promise<void> {
+  const layout = createLayout(projectRoot);
+  for (const versionId of await listSorted(layout.versions(beaconId))) {
+    const revocation = await readRecord<RevocationFile>(
+      layout.revocation(beaconId, versionId), "revocation",
+    );
+    const stamp = revocation?.idempotency;
+    if (stamp === undefined || !isRevocationMethod(stamp.method)) continue;
+    if (await readJournalEntry(projectRoot, stamp.keyHash)) continue;
+
+    const active = await readRecord<ActiveFile>(layout.active(beaconId), "active");
+    const removedRevokedActivePointer = active?.activeVersionId === versionId;
+    if (removedRevokedActivePointer) {
+      await writer.removeAtomic(layout.active(beaconId));
+    }
+    await mkdir(layout.journalIdempotency(), { recursive: true });
+    await createJournalEntry(
+      projectRoot,
+      {
+        key: stamp.key,
+        keyHash: stamp.keyHash,
+        method: stamp.method,
+        beaconId,
+        inputHash: stamp.inputHash,
+        result: { beaconId, versionId, draftId: null, revision: null },
+      },
+      writer,
+    );
   }
 }
 
@@ -510,6 +722,7 @@ export async function applyPendingDraftReplays(
   writer: AtomicWriter,
 ): Promise<void> {
   const layout = createLayout(projectRoot);
+  await applyPendingRevocationReplays(projectRoot, beaconId, writer);
   await applyPendingApprovalReplay(projectRoot, beaconId, writer);
   const draftIds = await listSorted(layout.drafts(beaconId));
 
