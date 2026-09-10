@@ -1,0 +1,119 @@
+# Apply Progress — Guided Beacon Capture
+
+## Scope and status
+
+- **Work unit:** `slice-1-script-contract-correction` (maintainer-authorized narrower correction of Slice 1)
+- **Delivery boundary:** Slice 1 only, `stacked-to-main`; accepted `size:exception` remains applicable. No commit, push, PR, publishing, browser install/launch, target contact, or external-repository modification was performed.
+- **Status:** complete. The legacy distribution test now preserves exact package-script enforcement while including the required `test:playwright-contract` script. The unused `src/domain/index.ts` root barrel was deleted.
+
+## Structured status consumed/produced
+
+```yaml
+schemaName: gentle-pi.sdd-status
+changeName: guided-beacon-capture
+artifactStore: openspec
+nativeAttemptAcquire:
+  state: proceed
+  workUnit: slice-1-script-contract-correction
+  token: parent-retained-not-read-or-persisted
+planningHome:
+  root: /home/pedro/pharos-worktrees/guided-beacon-capture
+  changesDir: /home/pedro/pharos-worktrees/guided-beacon-capture/openspec/changes
+changeRoot: /home/pedro/pharos-worktrees/guided-beacon-capture/openspec/changes/guided-beacon-capture
+actionContext:
+  mode: repo-local
+  workspaceRoot: /home/pedro/pharos-worktrees/guided-beacon-capture
+  allowedEditRoots:
+    - /home/pedro/pharos-worktrees/guided-beacon-capture
+  warnings: []
+applyState: slice-1-complete
+nextRecommended: parent-lifecycle
+```
+
+## Completed implementation tasks and checkbox evidence
+
+The persisted task artifact was re-read after updating it. All four implementation-owned Slice 1 rows are visibly checked:
+
+- RED — domain/schema contract tests for v1 discriminators, typed refusals, generated IDs, promoted-only eligibility, and the frozen semantic boundary.
+- GREEN — pure project/capture concepts, ports, domain barrels, and JSON Schema 2020-12 contracts.
+- TRIANGULATE — production, incomplete/oversized annotation, isolation, duplicate declaration, selector/path, secret-placeholder, and no-draft-operation fixtures.
+- REFACTOR — exact pinned public-contract dependencies/probe and its required package script; correction additionally updated the exact distribution script list and removed the unused domain root barrel.
+
+No Slice 2–7 task was started. There are no parent-owned task rows.
+
+## Files changed
+
+### Cumulative Slice 1 implementation
+
+- `src/domain/project/**`, `src/domain/capture/**`
+- `src/domain/ports/{clock,id-generator,project-context-store,capture-store,recorder,secret-resolver,sensitivity-scanner,contract-validator}.ts` and `src/domain/ports/index.ts`
+- `src/contracts/schemas/{project-init,capture-annotation,cli-envelope}.schema.json`
+- `tests/domain/project/contracts.test.ts`, `tests/domain/capture/contracts.test.ts`, `tests/contracts/schemas/contracts.test.ts`
+- `package.json`, `package-lock.json`, `vitest.playwright-contract.config.ts`, `tests/contracts/playwright/public-cli-contract.probe.ts`
+
+### This correction
+
+- `tests/cli/distribution.test.ts` — preserves the exact script allowlist and adds `test:playwright-contract`.
+- `src/domain/index.ts` — deleted; it had no callers/importers and is not required by Slice 1.
+- `openspec/changes/guided-beacon-capture/tasks.md`
+- `openspec/changes/guided-beacon-capture/apply-progress.md`
+
+## TDD Cycle Evidence
+
+| Cycle | RED | GREEN | TRIANGULATE | REFACTOR / result |
+|---|---|---|---|---|
+| Project/capture concepts and schemas | Focused contracts/schemas command failed before implementation because new domain modules and Ajv 8 were absent. | Smallest pure contracts/schemas passed. | Distinct isolation, secret-redaction, and unsafe-machine fixtures passed. | Strict-schema cleanup passed: 14 tests. |
+| Opt-in public CLI contract | N/A: a separate public-package probe intentionally excluded from the default Vitest glob. | Direct declared-bin/public-help probe passed. | Help covers `codegen`, `--output`, `--browser`, and Chromium. | One browser/TTY/signal/missing-browser test remains an explicit host-prerequisite skip. |
+| Script-contract correction | `npm test -- tests/cli/distribution.test.ts tests/domain/project tests/domain/capture tests/contracts/schemas` failed as expected: one old exact-list assertion rejected `test:playwright-contract` (18 passed, 1 failed). | Updating that existing expectation passed its focused distribution suite (5 tests). | Triangulation skipped: this is a single exact static manifest-list contract; the full focused command exercises it alongside three independent Slice 1 contract suites. | Deleted the unused root barrel; the required focused command passed (4 files, 19 tests). |
+
+## Verification evidence
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/cli/distribution.test.ts tests/domain/project tests/domain/capture tests/contracts/schemas` | PASS after correction: 4 files, 19 tests. Its pre-correction RED run was 18 passed, 1 failed at the old exact script list. |
+| `PLAYWRIGHT_CONTRACT=1 npm run test:playwright-contract` | PASS: 1 passed, 1 explicit skip. The probe only invokes public CLI help; no browser was installed or launched, no TTY/signal/missing-browser proof is claimed, and no target was contacted. |
+| `npm test` | PASS: 32 files, 297 tests. The probe is not discovered by the default glob. |
+| `npm run lint` | PASS; existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+
+## Design deviations and risks
+
+- No design or production-contract deviation. The correction is limited to the distribution test expectation and removal of an unused barrel.
+- The one-skip limitation remains explicit: browser launch, missing-browser diagnostics, and signal/TTY forwarding require an operator-preinstalled matching Chromium and interactive TTY. They were not run or claimed.
+- Slice 2–7 remain out of scope and are deferred to their assigned work units.
+
+## Workload / PR boundary
+
+- **Boundary:** Slice 1 correction only; no commit or PR was created.
+- **Delivery strategy:** `stacked-to-main`, accepted `size:exception`; no further slicing or delivery action is authorized here.
+- **Rollback boundary:** restore the former exact script expectation and unused root barrel deletion only; no other Slice 1 behavior needs reversal.
+
+## Remaining tasks
+
+The following are the exact unchecked implementation-owned task rows persisted in `tasks.md`:
+- [ ] **RED:** Add `tests/application/initialize-project.test.ts` for local/test/staging creation, production and invalid-URL refusal, same-request replay, different-input conflict, and absence of Beacon/capture side effects. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with `npm test -- tests/application/initialize-project.test.ts tests/adapters/fs-project-context-store tests/adapters/fs-project`; rollback: remove only this test's Slice 2 cases. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Implement `src/application/initialize-project.ts` and its normalization seam using injected clock, ID generator, project store, and canonical association path; allow only absolute home overrides or supported defaults. **Evidence:** focused command passes creation/replay cases before distinct filesystem failure cases are added; rollback: remove only the new use case/normalization code. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add `tests/adapters/fs-project-context-store/**` and `tests/adapters/fs-project/**` for 0700/0600 modes, write-once journal recovery, canonical longest-path selection, explicit-ID mismatch, symlink/path containment refusal, and byte-identical external fixture repository. **Evidence:** focused command passes success, conflict, and injected permission/rename/fsync/lstat/realpath failures; rollback: remove only the new adapter fixtures and tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Implement `src/adapters/fs-project-context-store/**` and only compatibility-preserving atomic/lock/containment helpers in `src/adapters/fs-project/**`; preserve existing `src/adapters/fs-beacon-store/**` behavior and tests. **Evidence:** focused command and the shared full gate pass after fixture deduplication; rollback: revert only this store/helper extraction, leaving existing BeaconStore unchanged. <!-- sdd-owner: implementation -->
+- [ ] **RED:** Add lifecycle-table tests under `tests/adapters/fs-capture-store/**` for legal `running → post_exit → resolving → promoted|rejected` and `running → resolving → failed|interrupted` transitions, illegal-transition refusal, and non-promoted annotation refusal. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with the Slice 3 focused command; rollback: remove only the lifecycle-table additions. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Implement `src/adapters/fs-capture-store/**` with project lock, request journal, private staging, safe terminal serialization, promoted-artifact references, and forward/reverse association records outside `SemanticSource` and `FsBeaconStore`. **Evidence:** focused command passes lifecycle persistence before crash cases; rollback: remove only CaptureStore source and its Slice 3 wiring. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add failure-injection coverage for crashes before/after session writes, resolution decisions, exclusive materialization, stage unlink, and journal completion; cover same-key replay/conflict, modes, symlink substitution, stale/live temp files, and no raw bytes after reject/fail/interruption. **Evidence:** Slice 3 focused command proves recovery completes only a durable decision and a second recovery is a no-op; rollback: remove only failure-injection fixtures/tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Extract only shared atomic/lock helpers required by both filesystem stores with compatibility exports, retaining existing BeaconStore recovery/concurrency coverage. **Evidence:** Slice 3 focused command and shared full gate pass with no overwrite of a promoted destination; rollback: revert only the helper extraction and CaptureStore changes. <!-- sdd-owner: implementation -->
+- [ ] **RED:** Add `tests/application/record-capture.test.ts` requiring declared `--secret-source env:NAME` or `--no-secret-sources`, transient resolution before allocation/spawn, persisted `running` before prerequisite outcome, and no secret leakage for missing/empty sources. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with the Slice 4 focused command; rollback: remove only these application tests. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Implement `src/application/record-capture.ts` and `src/adapters/secrets/env-secret-resolver.ts`; bind replay identity to context/input references rather than resolved values and dispose values after terminalization. **Evidence:** focused command passes declared-source and replay cases before process/scanner edge cases; rollback: remove only these application/resolver files. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add adapter tests in `tests/adapters/playwright/**` and `tests/adapters/sensitivity/**` for the Slice 1 documented arg vector, `shell: false`, no download/install, inherited TTY/stdout isolation, cancellation/non-zero/spawn cases, encoded canary values, scan failure, staged symlink/mutation, and pre-existing destination. **Evidence:** Slice 4 focused command passes without a real browser, target, or opt-in probe; rollback: remove only these fake-process/scanner tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Implement `src/adapters/playwright/playwright-recorder.ts` solely from the opt-in documented contract and `src/adapters/sensitivity/literal-sensitivity-scanner.ts`; persist a durable scan decision before exclusive promotion or cleanup and return only stable safe metadata. **Evidence:** Slice 4 focused command and shared full gate pass for cancellation, rejection, recovery retry, one terminal capture, no Beacon call, and no target mutation; rollback: remove only recorder/scanner source and Slice 4 helpers. <!-- sdd-owner: implementation -->
+- [ ] **RED:** Add validation/policy tests in `tests/adapters/validation/**` and `tests/application/annotation/**` for malformed versions, extra fields, missing semantic core, invalid isolation/references, selectors/Playwright/code/absolute paths, invalid entry points, and literal canary secrets before a draft call. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with the Slice 5 focused command; rollback: remove only these tests/fixtures. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Implement `src/adapters/validation/ajv-contract-validator.ts` and `src/application/annotation/{policy,mapper}.ts` with strict Ajv 2020-12; map only approved fields to unchanged `SemanticSource`, then call existing `project()` and `JcsSha256Hasher`. **Evidence:** focused command passes valid mapping while title, contract, capture, request, and artifact data remain outside projection; rollback: remove only validator/mapper source. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add paired interactive-shaped/noninteractive fixtures, stateless/stateful cases, secret-reference checks, semantic hash vectors, and `tests/integration/annotation-association.test.ts` crash windows before claim, after claim/createDraft/reverse-link, and before commit. **Evidence:** Slice 5 focused command proves invalid input never calls `BeaconStore.createDraft`, and retries/conflicts differ materially; rollback: remove only integration fixtures/tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Implement `src/application/{annotate-capture,inspect-beacon-draft}.ts` durable claim → unchanged namespaced `BeaconStore.createDraft` → association completion, including hash/revision/open agreement and read-only authority-labeled inspection. **Evidence:** Slice 5 focused command and shared full gate pass for exactly-once recovery, cross-project forgery refusal, and supporting/non-authoritative capture labels; rollback: remove only use cases/association changes, never delete valid drafts. <!-- sdd-owner: implementation -->
+- [ ] **RED:** Add failing `tests/cli/{composition,envelope,exit-codes}.test.ts` for the fixed v1 envelope, one stdout JSON object, exit taxonomy 0/1/2/3/4/5/10, redaction, and separated human diagnostics. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with the Slice 6 focused command; rollback: remove only these CLI-unit tests. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Implement `src/cli/{composition,envelope,exit-codes}.ts` with injectable command composition that resolves home and builds existing/new adapters without exposing adapter paths. **Evidence:** focused command passes envelopes and typed mappings before command grammar cases; rollback: remove only these CLI composition files. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add `tests/cli/commands/**` and `tests/cli/prompts/**` for exact common/options, capped single-read input, malformed UTF-8/JSON/discriminator/TTY-stdin refusal, no prompt/mutation in noninteractive mode, prompt cancellation, and identical interactive-shaped/JSON contracts. **Evidence:** Slice 6 focused command passes success, known refusal, unmodeled throw, and cancellation fakes; rollback: remove only builder/prompt tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Implement unregistered `src/cli/commands/{init,capture-record,capture-annotate,beacon-inspect}.ts` and `src/cli/prompts/**`, keeping Clack out of domain/application and record interactive-only. **Evidence:** Slice 6 focused command and shared full gate pass with no command registration, target mutation, or prohibited lifecycle wording; rollback: remove only command-builder/prompt code. <!-- sdd-owner: implementation -->
+- [ ] **RED:** Replace only obsolete catalogue assertions in `tests/cli/program.test.ts` and `tests/cli/distribution.test.ts` with failing expectations for root help/bare invocation listing exactly `init`, `capture record`, `capture annotate <capture-id>`, and `beacon inspect <beacon-id>`, while preserving exact version, shebang, package bin, and unknown command/option exit 2. **Evidence:** RED then GREEN/TRIANGULATE/REFACTOR with the Slice 7 focused command; rollback: remove only Slice 7 package/program assertions. <!-- sdd-owner: implementation -->
+- [ ] **GREEN:** Register only the four complete builders in `src/cli/program.ts` and wire `src/cli/index.ts`/`src/cli/composition.ts` once, retaining Commander normalization and typed product exits without aliases or later-lifecycle vocabulary. **Evidence:** focused command passes registration and safe packaged checks before full in-process journey coverage; rollback: unregister only these builders and revert Slice 7 wiring. <!-- sdd-owner: implementation -->
+- [ ] **TRIANGULATE:** Add `tests/integration/guided-beacon-capture-program.test.ts` that calls `createProgram`/composition in-process with temporary real ProjectContextStore/CaptureStore/FsBeaconStore/JcsSha256Hasher and a test-local fake `Recorder`; cover init → promoted capture/no Beacon → one open draft/hash → read-only inspection plus refusal/retry/recovery variants. **Evidence:** Slice 7 focused command passes with no packaged child process, browser, target, or test-only shipped hook; rollback: remove only this harness/test-local fakes and journey tests. <!-- sdd-owner: implementation -->
+- [ ] **REFACTOR:** Update only relevant `README.md` command/status sections after the harness is green: document the selected four-command non-production open-draft journey, secret-source prerequisite, supporting/non-authoritative recording, opt-in browser prerequisite, and excluded approval/readiness/generation/run/evidence/verification claims. **Evidence:** Slice 7 focused command and shared full gate pass; separately confirm `npm test` remains hermetic and the real probe runs only via `PLAYWRIGHT_CONTRACT=1 npm run test:playwright-contract`; rollback: revert only Slice 7 README and public registration/harness changes. <!-- sdd-owner: implementation -->

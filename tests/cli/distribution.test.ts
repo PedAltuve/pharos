@@ -72,7 +72,14 @@ describe("built and packaged distribution", () => {
 
     expect(
       Object.keys(manifest.scripts as Record<string, string>).sort(),
-    ).toEqual(["build", "lint", "test", "test:watch", "typecheck"]);
+    ).toEqual([
+      "build",
+      "lint",
+      "test",
+      "test:playwright-contract",
+      "test:watch",
+      "typecheck",
+    ]);
     expect(manifest.private).toBeUndefined();
     for (const hook of ["prepare", "prepack", "postpack", "prepublish", "postinstall"]) {
       expect(manifest[hook]).toBeUndefined();

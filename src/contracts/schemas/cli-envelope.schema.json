@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.dev/contracts/cli-envelope/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "command", "outcome", "data", "errors", "next_action"],
+  "properties": {
+    "contract": { "const": "pharos.cli-envelope/1" },
+    "command": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "outcome": { "enum": ["succeeded", "refused", "failed", "inconclusive", "interrupted"] },
+    "data": { "type": "object" },
+    "errors": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["rule", "category", "field"], "properties": { "rule": { "type": "string", "minLength": 1, "maxLength": 256 }, "category": { "type": "string", "minLength": 1, "maxLength": 256 }, "field": { "anyOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] } } } },
+    "next_action": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["command", "reason"], "properties": { "command": { "type": "string", "minLength": 1, "maxLength": 1024 }, "reason": { "type": "string", "minLength": 1, "maxLength": 1024 } } }] }
+  }
+}

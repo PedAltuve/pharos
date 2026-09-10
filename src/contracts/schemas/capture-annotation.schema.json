@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.dev/contracts/capture-annotation/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "title", "purpose", "actor", "entry_point", "actions", "checkpoints", "variables", "outcomes", "allowed_variation", "prohibited_regressions", "readiness_intent"],
+  "properties": {
+    "contract": { "const": "pharos.capture-annotation/1" },
+    "title": { "$ref": "#/$defs/text" },
+    "purpose": { "$ref": "#/$defs/text" },
+    "actor": {
+      "type": "object", "additionalProperties": false, "required": ["type", "identity_ref"],
+      "properties": { "type": { "$ref": "#/$defs/token" }, "identity_ref": { "anyOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] } }
+    },
+    "entry_point": {
+      "type": "object", "additionalProperties": false, "required": ["path", "query", "fragment"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^/(?!/)(?!.*(?:\\\\|\\.\\.(?:/|$)))[^?#]*$" },
+        "query": { "anyOf": [{ "type": "object", "additionalProperties": { "type": "string", "maxLength": 1024 } }, { "type": "null" }] },
+        "fragment": { "anyOf": [{ "type": "string", "maxLength": 1024 }, { "type": "null" }] }
+      }
+    },
+    "actions": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "$ref": "#/$defs/action" } },
+    "checkpoints": {
+      "type": "object", "additionalProperties": false, "required": ["ordered", "entries"],
+      "properties": { "ordered": { "const": true }, "entries": { "type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/$defs/checkpoint" } } }
+    },
+    "variables": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/$defs/variable" } },
+    "outcomes": { "type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/$defs/declaration" } },
+    "allowed_variation": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/$defs/declaration" } },
+    "prohibited_regressions": { "type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/$defs/declaration" } },
+    "readiness_intent": { "$ref": "#/$defs/readinessIntent" }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!.*(?:page[.]|locator|selector|playwright|[\\\\]|/|https?:|[()]|=>))[A-Za-z][A-Za-z0-9_-]*$" },
+    "jsonValue": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "null" }, { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } }, { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } }] },
+    "action": {
+      "type": "object", "additionalProperties": false, "required": ["action", "target", "value"],
+      "properties": {
+        "action": { "$ref": "#/$defs/token" }, "target": { "anyOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }] },
+        "value": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/jsonValue" }, { "type": "object", "additionalProperties": false, "required": ["kind", "variable"], "properties": { "kind": { "const": "variable" }, "variable": { "$ref": "#/$defs/token" } } }] }
+      }
+    },
+    "checkpoint": {
+      "type": "object", "additionalProperties": false, "required": ["id", "after_action", "expectations"],
+      "properties": { "id": { "$ref": "#/$defs/token" }, "after_action": { "anyOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }] }, "expectations": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/jsonValue" } } }
+    },
+    "declaration": { "type": "object", "additionalProperties": false, "required": ["id", "description"], "properties": { "id": { "$ref": "#/$defs/token" }, "description": { "type": ["string", "null"], "maxLength": 65536 } } },
+    "variable": {
+      "type": "object", "additionalProperties": false, "required": ["name", "classification", "constraints", "secret_reference_id", "non_sensitive_example"],
+      "properties": {
+        "name": { "$ref": "#/$defs/token" }, "classification": { "enum": ["representative", "required_scenario", "test_data"] },
+        "constraints": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "$ref": "#/$defs/token" }, "value": { "$ref": "#/$defs/jsonValue" } } } },
+        "secret_reference_id": { "anyOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] }, "non_sensitive_example": { "$ref": "#/$defs/jsonValue" }
+      },
+      "allOf": [{ "if": { "properties": { "secret_reference_id": { "type": "string" } }, "required": ["secret_reference_id"] }, "then": { "properties": { "non_sensitive_example": { "type": "null" } } } }]
+    },
+    "readinessIntent": {
+      "type": "object", "additionalProperties": false, "required": ["side_effect_class", "isolation"],
+      "properties": {
+        "side_effect_class": { "enum": ["stateful", "stateless"] },
+        "isolation": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["strategy", "scope"], "properties": { "strategy": { "$ref": "#/$defs/token" }, "scope": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } } } }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "side_effect_class": { "const": "stateless" } }, "required": ["side_effect_class"] }, "then": { "properties": { "isolation": { "type": "null" } } } },
+        { "if": { "properties": { "side_effect_class": { "const": "stateful" } }, "required": ["side_effect_class"] }, "then": { "properties": { "isolation": { "type": "object" } } } }
+      ]
+    }
+  }
+}
