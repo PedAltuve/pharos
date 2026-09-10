@@ -1,12 +1,15 @@
 {
   "name": "pharos",
   "version": "0.0.0",
-  "private": true,
   "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "bin": {
+    "pharos": "dist/cli/index.js"
+  },
+  "files": ["dist/", "README.md", "LICENSE"],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
@@ -27,6 +30,7 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
-    "canonicalize": "2.1.0"
+    "canonicalize": "2.1.0",
+    "commander": "14.0.1"
   }
 }

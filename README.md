@@ -40,7 +40,36 @@ Core rules:
 | Technical design | ✅ Done ([docs/technical-design-v1.md](docs/technical-design-v1.md)) |
 | Toolchain + hexagonal skeleton | ✅ Done |
 | Semantic projection and hashing (domain core) | 🔜 Next |
-| Beacon/evidence stores, verification engine, CLI, Playwright adapter | Planned |
+| Root `pharos` executable (`--help` / `--version` only) | ✅ Done |
+| Beacon/evidence stores, verification engine, product commands, Playwright adapter | Planned |
+
+## Command line
+
+The `pharos` executable exists and runs. `--help` and `--version` are its **complete** surface — no product workflow or subcommand is available yet, and any other command exits with status 2.
+
+Packaging never triggers a build, so build explicitly before packing or installing locally:
+
+```bash
+npm ci
+npm run build
+```
+
+Run the built entry directly:
+
+```bash
+node dist/cli/index.js --help
+node dist/cli/index.js --version
+```
+
+Or pack and install it into a throwaway project to exercise the real `pharos` shim:
+
+```bash
+npm pack
+npm install --ignore-scripts ./pharos-0.0.0.tgz
+npx pharos --version
+```
+
+Beacon approval, evidence storage, verification, and browser automation are not reachable from the CLI.
 
 ## Development
 
