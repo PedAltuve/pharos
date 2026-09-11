@@ -146,3 +146,139 @@ All four implementation-owned correction rows are visibly checked; no Slice 2–
 | `npm pack --dry-run --json --ignore-scripts` | PASS; lists `dist/contracts/schemas/{project-init,capture-annotation,cli-envelope}.schema.json` |
 
 **Runtime harness:** N/A—this pure/package correction did not launch Playwright/Chromium, use a TTY, contact a target, install repository dependencies, or install browsers. The temporary consumer performed only the required offline `npm install --ignore-scripts --offline --no-audit --no-fund --package-lock=false` of the just-packed archive; the parent token was untouched. **Boundary/rollback:** bounded Slice 1 correction only; revert its schema, project/capture/port types, copy/build step, tests, and evidence. No Slice 2–7 runtime behavior. **No commit:** no commit, push, amend, rebase, issue/PR edit, or publishing.
+
+## Slice 2 apply — project context and initialization
+
+### Structured status consumed
+
+Parent-provided `gentle-ai.sdd-status` v2 was consumed as authoritative: change `guided-beacon-capture`; `artifactStore: openspec`; `applyState: ready`; `dependencies.apply: ready`; `nextRecommended: apply`; repository-local action context with workspace and only allowed edit root `/home/pedro/pharos-worktrees/guided-beacon-capture`; warnings `[]`. Parent-owned attempt authority for `slice-2-project-context-initialization` was not acquired, inspected, settled, reset, or persisted here.
+
+### Completed tasks and persisted checkbox evidence
+
+All four implementation-owned Slice 2 rows are now visibly `- [x]` in `tasks.md`:
+
+- RED: application tests establish non-production creation, invalid/prod refusal, replay/conflict forwarding, and no Beacon/CaptureStore dependency.
+- GREEN: `InitializeProject` constructs validated context with injected clock/IDs and delegates application-owned routing to the context store.
+- TRIANGULATE: filesystem tests cover private modes, write-once recovery, conflict, canonical nested selection, external-byte preservation, symlink refusal, and injected chmod/rename/fsync/lstat/realpath/mkdir failures.
+- REFACTOR: filesystem helpers centralize private directory, canonical-path, atomic private JSON, home resolution, and operation-observer seams. No `fs-beacon-store` source changed.
+
+The persisted task artifact was re-read after all updates: Slice 2 has no unchecked row. Slices 3–7 remain the exact 20 unchecked implementation-owned rows already recorded verbatim in the `Remaining tasks` snapshot above and unchanged in `tasks.md`; no parent-owned rows exist.
+
+### Files changed
+
+- `src/application/initialize-project.ts`
+- `src/adapters/fs-project/{index,home,filesystem}.ts`
+- `src/adapters/fs-project-context-store/index.ts`
+- `tests/application/initialize-project.test.ts`
+- `tests/adapters/fs-project/fs-project.test.ts`
+- `tests/adapters/fs-project-context-store/fs-project-context-store.test.ts`
+- `openspec/changes/guided-beacon-capture/{tasks,apply-progress}.md`
+
+### TDD Cycle Evidence
+
+| Cycle | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|
+| InitializeProject application use case | Required focused command failed with module-not-found for `initialize-project.js`. | Added the minimal injected use case; focused command passed, 1 file / 5 tests. | Local/test/staging creation plus production/invalid URL and store replay/conflict cases passed. | Kept the use case port-only; no Beacon/CaptureStore dependency. |
+| Context store and home/filesystem adapters | Required focused command failed with both adapter modules missing. | Private context/journal/association materialization passed, 3 files / 12 tests. | Nested association, replay, mismatch, external byte identity, symlink refusal, and failure injection passed, 3 files / 19 tests. | Extracted narrow private-directory/canonical/atomic helpers; focused tests stayed green. |
+| Filesystem failure seams | New chmod-injection test failed genuinely because the observer did not cover permission changes. | Added the `chmod` observer hook; focused adapter test passed, 8 tests. | Distinct lstat, realpath, mkdir, chmod, rename, and fsync injected failures are asserted. | The operation observer matches the existing atomic-writer test-observer pattern and remains adapter-local. |
+
+### Verification
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/application/initialize-project.test.ts tests/adapters/fs-project-context-store tests/adapters/fs-project` | PASS: 3 files, 19 tests. RED evidence: initial app run failed for missing use case; adapter run failed for both missing adapters; chmod seam run failed 1/8 before its GREEN change. |
+| `npm test` | PASS: 35 files, 321 tests; hermetic—no browser, TTY, target, external repository, or Playwright probe used. |
+| `npm run lint` | PASS; existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+
+**Runtime harness:** N/A—Slice 2 is an injected application/filesystem boundary, not a registered CLI journey. Its real temporary-filesystem tests prove application-owned storage only; they neither launch a browser nor use a TTY, target, or external repository. **Deviation/advisories:** no design deviation. The Slice 1 project request-ID branding/distinction and schema-copy synchronization/staleness advisories remain carried forward and were not broadened. **Workload / PR boundary:** Slice 2 only, `stacked-to-main`, with the maintainer-accepted `size:exception`; no commit or PR was created. **Rollback boundary:** remove only the Slice 2 application/context-store/fs-project helpers and their tests; already-created Pharos-home context files remain inert and are not destructively removed. **No delivery actions:** no commit, push, PR/issue action, publishing, browser install/launch, target contact, or external repository modification occurred.
+
+## Slice 2 replay correction — project context
+
+### Structured status consumed
+
+Parent-provided `gentle-ai.sdd-status` v2 was authoritative: change `guided-beacon-capture`, store `openspec`, `applyState: ready`, proposal/specs/design/tasks `all_done`, verify/archive blocked, and `nextRecommended: apply`. Action context was `repo-local` with workspace and only allowed root `/home/pedro/pharos-worktrees/guided-beacon-capture`; warnings were empty. Parent-owned correction-attempt authority for `slice-2-project-context-replay-correction` was neither acquired, inspected, settled, reset, nor persisted.
+
+### Correction
+
+`FsProjectContextStore.initialize()` now treats only `requestId`, `inputHash`, and canonical `associationPath` as durable replay identity. The generated `ProjectContext` is a proposal for an initial plan only, so a same-input retry returns the stored project ID/timestamp rather than conflicting when injected IDs or clock values advance. The pre-existing typed `project-request-conflict` remains for changed stable input. No port/domain signature changed. Initialization remains isolated to the Pharos home: no Beacon/CaptureStore dependency, association-path write, or external-target write was introduced.
+
+### TDD Cycle Evidence
+
+| Cycle | Evidence |
+|---|---|
+| RED | Added an application-to-real-filesystem regression with advancing injected project IDs and clock timestamps. `npm test -- tests/application/initialize-project.test.ts` failed genuinely: retry returned `project-request-conflict` instead of the original persisted context (1 failed, 5 passed). |
+| GREEN | Removed generated-context equality from the durable replay comparison and documented the stable identity boundary. The required focused command passed: 3 files, 20 tests. |
+| TRIANGULATE | Added the distinct advancing-fakes changed-`inputHash` retry case; it returns typed `project-request-conflict`. Focused command passed: 3 files, 21 tests. |
+| REFACTOR | Extracted the advancing-fakes fixture helper in the application test; focused command remained green: 3 files, 21 tests. |
+
+### Final verification
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/application/initialize-project.test.ts` | First invocation from the parent checkout found no matching test file (exit 1); rerun from the authoritative worktree produced the RED failure above. |
+| `npm test -- tests/application/initialize-project.test.ts tests/adapters/fs-project-context-store tests/adapters/fs-project` | PASS after GREEN, TRIANGULATE, and REFACTOR: 3 files, 21 tests. |
+| `npm test` | PASS: 35 files, 323 tests; hermetic. |
+| `npm run lint` | PASS; existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+
+### Persisted task and delivery boundary
+
+The four Slice 2 implementation-owned task rows remain visibly checked because their final evidence remains true. Slices 3–7 remain unchanged and unchecked; the exact persisted unchecked rows remain in the earlier `Remaining tasks` snapshot in this cumulative artifact. No parent-owned rows exist.
+
+**Correction files:** `src/adapters/fs-project-context-store/index.ts`, `tests/application/initialize-project.test.ts`, and this progress artifact. `tasks.md` was re-read but did not require a checkbox edit. **Runtime harness:** N/A—no registered CLI or runtime boundary exists for this adapter/use-case correction. No browser/TTY/target/external repository was used. **Rollback boundary:** revert only the durable replay comparison/comment and advancing-fakes regression helper/tests; existing initial Slice 2 context-store behavior and any already-created Pharos-home files remain otherwise untouched. **Delivery boundary:** Slice 2 correction only, `stacked-to-main`, maintainer-accepted `size:exception`; no commit, push, PR/issue action, publication, install, browser launch, target contact, or external-repository modification occurred.
+
+## Slice 2 independent-verifier remediation
+
+### Structured status consumed
+
+The parent-provided authoritative `gentle-ai.sdd-status@2` was consumed: change `guided-beacon-capture`; store `openspec`; proposal/specs/design/tasks done; `applyState: ready`; `dependencies.apply: ready`; `nextRecommended: apply`; repo-local action context with workspace and only allowed root `/home/pedro/pharos-worktrees/guided-beacon-capture`; warnings `[]`. Parent-owned attempt authority for `slice-2-independent-verifier-remediation` was not acquired, inspected, settled, reset, or persisted.
+
+### Remediation completed
+
+1. Private initialization-plan, association, and `project.json` state reads now reject symlinked/non-regular descendants. Existing-file adoption validates with `lstat`; reads validate then use a `O_NOFOLLOW` descriptor and require a regular file before parsing.
+2. Explicit `resolveById(projectId, canonicalCurrentPath?)` verifies the persisted context embeds the selected ID and rejects a conflicting nearest current-path association with the existing `project-association-mismatch` refusal. Implicit longest-path routing still resolves the nearest association.
+3. `InitializeProjectRequest` no longer accepts `inputHash`. The use case hashes normalized name, mode, environment, base URL, and association path through the injected `Hasher`; generated project ID and timestamp remain excluded. Changed semantic input under one request conflicts, while normalized equivalents replay.
+
+### Persisted task evidence
+
+`tasks.md` was re-read after this remediation. Its four implementation-owned Slice 2 rows remain visibly `- [x]`; their actual proof now covers descendant state-file symlinks, explicit-ID/current-path mismatch, and trusted request identity. No checkbox changed because no new Slice 2 task was completed, and Slices 3–7 remain unchecked. There are no parent-owned rows.
+
+### TDD Cycle Evidence
+
+| Finding | Layer / safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|
+| Descendant state-file symlink | Temporary-filesystem adapter; pre-edit focused suite: 3 files, 21 tests PASS | New plan, association, and `project.json` symlink cases failed genuinely: 3 failures; each symlinked state path was accepted. | Added exclusive-existing-file validation and no-follow regular-file reads; focused adapter/application suite passed 23 tests. | The three distinct state locations all reject, rather than relying only on prior home-root coverage. | Kept the policy in shared private-state helpers so plan/association/context readers use one check; focused suite passed 32 tests. |
+| Explicit project ID/path mismatch | Temporary-filesystem adapter; same safety net | New current-path association and substituted embedded-ID cases both failed genuinely, returning the wrong context. | Added explicit-path verification and embedded-ID agreement; focused suite passed 23 tests. | Covers both an otherwise-valid selected project under another association and a valid-shaped substituted `project.json`; implicit nested selection remains covered. | Extracted nearest-association lookup while retaining longest-path traversal; focused suite passed 32 tests. |
+| Caller-controlled initialization identity | Application plus real temporary filesystem; same safety net | Four changed normalized semantic-field cases and caller-hash assertion failed genuinely (5 failures); association-path conflict already had real coverage. | Removed the caller field and derived identity after `createProjectContext`; focused suite passed 23 tests. | Added equivalent whitespace/trailing-slash normalization replay with advancing IDs/clocks; focused suite passed 32 tests. | Extracted `initializationInputHash` to make the excluded generated fields explicit; focused suite passed 32 tests. |
+
+### Verification
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/application/initialize-project.test.ts tests/adapters/fs-project-context-store tests/adapters/fs-project` | PASS: 3 files, 32 tests. |
+| `npm test` | PASS: 35 files, 334 tests; hermetic (no browser, TTY, target, or external repository). |
+| `npm run lint` | PASS; existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+
+All eight intended untracked files were explicitly checked with `git diff --no-index --check` and for conflict/error markers; all passed. The runtime harness is N/A: this is an injected application/filesystem boundary and did not launch a CLI, browser, TTY, or target.
+
+### Files, scope, and rollback
+
+**Changed in this remediation:**
+
+- `src/application/initialize-project.ts`
+- `src/domain/ports/project-context-store.ts`
+- `src/adapters/fs-project/filesystem.ts`
+- `src/adapters/fs-project-context-store/index.ts`
+- `tests/application/initialize-project.test.ts`
+- `tests/adapters/fs-project-context-store/fs-project-context-store.test.ts`
+- `openspec/changes/guided-beacon-capture/apply-progress.md`
+
+No Slice 3–7 file or behavior was implemented. This remains the Slice 2 `stacked-to-main` work unit under the accepted `size:exception`; no commit, push, PR/issue edit, publication, install, browser launch, target contact, or external-repository modification occurred. **Rollback boundary:** revert only the listed remediation source/test changes; leave existing Pharos-home state inert and do not rewrite target repositories.

@@ -11,6 +11,7 @@ export interface InitializeProjectContextCommand {
 /** Application-owned context routing. It must not write a target repository. */
 export interface ProjectContextStore {
   initialize(command: InitializeProjectContextCommand): Promise<Result<ProjectContext, ProjectContextRefusal>>;
-  resolveById(projectId: ProjectId): Promise<Result<ProjectContext, ProjectContextRefusal>>;
+  /** Explicit selection may verify the nearest association for a canonical current path. */
+  resolveById(projectId: ProjectId, canonicalCurrentPath?: string): Promise<Result<ProjectContext, ProjectContextRefusal>>;
   resolveByPath(canonicalPath: string): Promise<Result<ProjectContext, ProjectContextRefusal>>;
 }
