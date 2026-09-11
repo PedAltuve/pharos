@@ -282,3 +282,168 @@ All eight intended untracked files were explicitly checked with `git diff --no-i
 - `openspec/changes/guided-beacon-capture/apply-progress.md`
 
 No Slice 3–7 file or behavior was implemented. This remains the Slice 2 `stacked-to-main` work unit under the accepted `size:exception`; no commit, push, PR/issue edit, publication, install, browser launch, target contact, or external-repository modification occurred. **Rollback boundary:** revert only the listed remediation source/test changes; leave existing Pharos-home state inert and do not rewrite target repositories.
+
+## Slice 3 apply — recoverable CaptureStore lifecycle storage
+
+### Structured status consumed
+
+The parent-provided `gentle-ai.sdd-status@2` was authoritative: `guided-beacon-capture`, `openspec`, `applyState: ready`, `dependencies.apply: ready`, and `nextRecommended: apply`. Action context was `repo-local`, with workspace and only allowed edit root `/home/pedro/pharos-worktrees/guided-beacon-capture`; no warnings. Parent-owned attempt authority for `slice-3-capture-lifecycle-storage` was not acquired, inspected, settled, reset, or persisted.
+
+### Completed tasks and persisted checkbox evidence
+
+The four implementation-owned Slice 3 rows are visibly `- [x]` in the re-read `tasks.md`:
+
+- RED: lifecycle-table tests cover permitted terminal paths, refusals, and promoted-only annotation eligibility.
+- GREEN: `FsCaptureStore` owns project-scoped request journals, private staging/session state, promoted supporting artifacts, and forward/reverse supporting associations without accessing `SemanticSource` or `FsBeaconStore` data.
+- TRIANGULATE: real temporary-filesystem tests cover request conflict/replay, restrictive modes, safe rejection/fail/interruption cleanup, substituted symlink refusal, stale/young temp handling, and failure injection from pre-session through journal completion.
+- REFACTOR: `ProjectLock` moved to `src/adapters/fs-project/project-lock.ts`; `fs-beacon-store/lock.ts` is a compatibility re-export. Existing BeaconStore recovery/concurrency tests remain unchanged and green.
+
+No parent-owned task exists. Slice 4–7 rows remain unchecked and were not edited.
+
+### TDD Cycle Evidence
+
+| Task | Layer / safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|
+| Slice 3 RED/GREEN | New temporary-filesystem adapter test; existing Beacon recovery/concurrency baseline: 2 files, 6 tests PASS | Missing `FsCaptureStore` module failed as expected. | Lifecycle/private-state suite passed: 5 tests; typecheck passed. | Expanded to legal failure/interruption/rejection paths, request conflict, promoted-only eligibility, and safe serialization. | Kept I/O isolated in the adapter and the app file as a recorder-free scaffold. |
+| Slice 3 TRIANGULATE | Adapter suite | Observer crash test initially failed because the promotion stage was not observable. | Added durable stage observation and recovery after materialization. | 5 crash windows (`session-written`, decision, materialization, unlink, journal), pre-session replay, symlink refusal, stale/live temps, and association tests passed: 18 tests. | Extracted destination verification so recovery completes a durable promotion after stage unlink without overwriting bytes. |
+| Slice 3 REFACTOR | Existing `FsBeaconStore` recovery/concurrency safety net | Baseline 6/6 passed before lock extraction. | Shared lock move retained focused pass. | Compatibility import coverage is the existing focused recovery/concurrency suite. | Focused command passed: 4 files, 25 tests. |
+| Slice 3 app scaffold | New application test | Missing module failed as expected. | Minimal identity seam passed: 1 test. | N/A: intentionally structural and recorder-free until Slice 4. | No process, secret, scanner, browser, or CLI behavior introduced. |
+
+### Verification
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/adapters/fs-capture-store tests/application/record-capture.test.ts tests/adapters/fs-beacon-store/recover.test.ts tests/adapters/fs-beacon-store/concurrency.test.ts` | PASS: 4 files, 25 tests. |
+| `npm test` | PASS: 37 files, 353 tests; hermetic. |
+| `npm run lint` | PASS; pre-existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+
+All five intended untracked files were explicitly checked using `git diff --no-index --check` and conflict-marker scan: PASS. Runtime harness is N/A: tests use temporary filesystem storage only; no browser, TTY, target, network, process recorder, or external repository was used.
+
+### Files, scope, workload, and rollback
+
+- `src/adapters/fs-capture-store/index.ts`
+- `src/adapters/fs-project/project-lock.ts`
+- `src/adapters/fs-beacon-store/lock.ts` (compatibility re-export only)
+- `src/application/record-capture.ts` (Slice 3 scaffold only)
+- `src/domain/capture/{index,types}.ts`
+- `src/domain/ports/capture-store.ts`
+- `tests/adapters/fs-capture-store/fs-capture-store.test.ts`
+- `tests/application/record-capture.test.ts`
+- `openspec/changes/guided-beacon-capture/{tasks,apply-progress}.md`
+
+**Delivery boundary:** Slice 3 only, `stacked-to-main`, accepted `size:exception`; no delivery/external action occurred. **Rollback boundary:** remove the Slice 3 capture adapter/scaffold/tests and restore the lock compatibility file; capture session/journal/artifact files already created by an operator remain inert. **Design deviation:** none. Slices 4–7 are deferred; their exact persisted unchecked rows remain unchanged in `tasks.md`.
+
+## Slice 3 session-validation correction
+
+### Structured status consumed
+
+The parent-provided authoritative `gentle-ai.sdd-status@2` was consumed for `guided-beacon-capture`: `openspec` store, apply ready, proposal/spec/design/tasks complete, repo-local action context, workspace and only allowed edit root `/home/pedro/pharos-worktrees/guided-beacon-capture`, and no warnings or blockers. The authorized narrower work unit is `slice-3-session-validation-correction`. Parent-owned correction-attempt authority was not acquired, inspected, settled, reset, or persisted.
+
+### Correction completed
+
+`FsCaptureStore` now parses persisted `session.json` records into constructed, validated closed-union shapes rather than casting bytes. Common contract/project/capture/request IDs, canonical ISO timestamps, safe unique `env:NAME` secret-reference IDs, and exact status-specific fields are required. Unknown status, extra/forbidden fields, missing required fields, invalid identifiers/contracts/timestamps, and invalid promoted metadata return `{ rule: "capture-store-corruption", captureId: <requested ID> }`.
+
+Promoted artifact metadata now has one canonical adapter-owned identity: `captures/<current-capture-id>/recording.spec.ts`, a non-negative safe integer byte size, and lowercase SHA-256 digest. Traversal, absolute, backslash, encoded, foreign-capture, and alternate-filename references are refused before durable resolution state is written. `detailFor()` now receives and reports the actual current capture ID. Legal lifecycle transitions, recovery, stage cleanup, associations, and `FsBeaconStore` compatibility remain covered by the focused suite.
+
+### Persisted task evidence
+
+`tasks.md` was re-read after correction verification. The four Slice 3 implementation-owned rows remain visibly checked because the final proof is real; no checkbox was newly completed or changed. Slice 4–7 remain unchecked, including the exact rows retained in the earlier cumulative `Remaining tasks` snapshot; no parent-owned row exists.
+
+### TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| Persisted session and promotion validation correction | `tests/adapters/fs-capture-store/fs-capture-store.test.ts` / temporary-filesystem integration | Slice 3 focused suite: 4 files, 25 tests PASS | Added malformed persisted-record and resolution-input regressions; focused file failed genuinely: 18 failures, including unknown status, noncanonical timestamp, unsafe secret reference, missing/forbidden discriminant fields, malformed promoted metadata, and synthetic `cap_invalid` output. | Validated common/discriminant parser plus capture-bound artifact validator passed: 1 file, 38 tests. | Added all ten valid closed-union persisted shapes plus invalid `not-a-time` and capture-ID cases; final focused file passed: 1 file, 50 tests. | Constructed status-specific records from a shared validated common shape and extracted safe-reference checking; typecheck and focused test stayed green. |
+
+### Verification and harness evidence
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/adapters/fs-capture-store/fs-capture-store.test.ts` | RED: 1 file, 18 failed / 20 passed. Final: PASS, 1 file / 50 tests. |
+| `npm test -- tests/adapters/fs-capture-store tests/application/record-capture.test.ts tests/adapters/fs-beacon-store/recover.test.ts tests/adapters/fs-beacon-store/concurrency.test.ts` | PASS: 4 files, 57 tests. |
+| `npm test` | PASS: 37 files, 385 tests; hermetic. An intermediate run failed only because distribution invoked build while this correction had TypeScript errors; after the GREEN/refactor type fixes the required final run passed. |
+| `npm run lint` | PASS; existing eslint-boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+| Built-module temporary-filesystem harness | PASS: a seeded `session.json` containing `status: "totally-invalid"`, `createdAt: "not-a-time"`, and `captures/../../outside` returned `{"ok":false,"error":{"rule":"capture-store-corruption","captureId":"cap_018f47de-7a00-7cc0-8000-000000000001"}}`; the temporary root was removed in `finally`. |
+
+### Files, workload, rollback, and constraints
+
+**Corrected files:**
+
+- `src/adapters/fs-capture-store/index.ts`
+- `tests/adapters/fs-capture-store/fs-capture-store.test.ts`
+- `openspec/changes/guided-beacon-capture/apply-progress.md`
+
+**Workload / PR boundary:** one bounded Slice 3 correction within the existing `stacked-to-main` Slice 3 work unit; accepted `size:exception` remains the delivery decision. No commit or PR was created. **Rollback boundary:** revert only the session parser/artifact validation and the added malformed-session regressions; existing capture records remain inert and no valid Beacon data is touched. **No delivery/external action:** no commit, push, issue/PR action, publication, install, browser/TTY/target/network action, or external-repository modification occurred. **Design deviation:** none. Slices 4–7 were not implemented.
+
+## Slice 3 state-records remediation
+
+### Structured status consumed
+
+Parent-authorized native context was consumed as apply-ready for `guided-beacon-capture`, `openspec`, `repo-local`, with only `/home/pedro/pharos-worktrees/guided-beacon-capture` editable and no warnings. This third bounded remediation remains in the accepted `stacked-to-main` Slice 3 work unit under the existing `size:exception`. Parent-owned attempt authority for `slice-3-state-records-remediation` was not acquired, inspected, settled, reset, or persisted.
+
+### Remediation completed
+
+`FsCaptureStore` now parses request-journal plans and optional completions as closed records before comparison or property access. Invalid/foreign request identity, missing/unsafe secret references, noncanonical timestamps, nonterminal/mismatched completion summaries, and non-regular journal state return `capture-store-corruption` for the command capture rather than throwing. Terminal completion writes re-validate the original plan.
+
+Capture/Beacon association reads and writes now construct a full closed association only after validating contract, project/capture/request/beacon/draft IDs, nonempty identity, revision/state, timestamps, committed-only semantic fields, and exact index identities. Reads require a matching validated counterpart. Matching one-sided records are repaired on retry; conflicts are refused without overwrite. New bounded observer stages cover forward/reverse association writes, and both pending-claim and pending-to-committed crash windows converge idempotently.
+
+### Persisted task evidence
+
+`tasks.md` was re-read after final verification. All four implementation-owned Slice 3 rows remain visibly `- [x]`; their proof now includes the remediated request-journal and closed two-index association boundary. No task checkbox changed because this is a bounded correction to already-complete Slice 3 evidence. Slice 4–7 rows remain unchecked and unmodified; no parent-owned rows exist.
+
+### TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|
+| Slice 3 persisted records remediation | `tests/adapters/fs-capture-store/fs-capture-store.test.ts` / temporary-filesystem integration | Pre-edit focused suite passed: 50 tests. | Added exact missing-`secretSourceReferences` replay regression plus malformed/mismatched completion, non-regular journal, partial invented association, one-sided/reverse-conflict, and crash-window tests. Focused run failed genuinely: 10 failures, including the reproduced `TypeError`. | Closed request/completion and association parsers plus two-index repair made the focused suite pass: 60 tests; typecheck passed after parser narrowing. | Added terminal-status/session disagreement, symlinked session, malformed association matrix, and both forward/reverse pending-to-committed crash cases; 72 focused tests passed. | Constructed only validated records, centralized semantic association comparison, and retained observer stages; focused, lint, and typecheck remained green. |
+
+### Verification and harness evidence
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/adapters/fs-capture-store/fs-capture-store.test.ts` | RED: 60 tests, 10 failed; final PASS: 72 tests. |
+| `npm test -- tests/adapters/fs-capture-store tests/application/record-capture.test.ts tests/adapters/fs-beacon-store/recover.test.ts tests/adapters/fs-beacon-store/concurrency.test.ts` | PASS: 4 files, 79 tests. |
+| `npm test` | PASS: 37 files, 407 tests; hermetic. |
+| `npm run lint` | PASS; existing boundaries deprecation warnings only. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+| Built-module temporary-filesystem harness | PASS: malformed journal with omitted secret references and partial `{projectId,captureId,state:"invented"}` association each returned the typed `capture-store-corruption` for `cap_018f47de-7a00-7cc0-8000-000000000001`; both temporary roots were removed in `finally`. |
+| Intended untracked-file inspection | PASS: five intended untracked files passed no-index whitespace and conflict-marker inspection. |
+
+### Files, workload, rollback, and constraints
+
+**Remediation files:**
+
+- `src/adapters/fs-capture-store/index.ts`
+- `tests/adapters/fs-capture-store/fs-capture-store.test.ts`
+- `openspec/changes/guided-beacon-capture/apply-progress.md`
+
+**Candidate size:** relative to base `66c00d08d6f63f19f8d99d33052c7a1870c84c9f`, the retained full candidate is `+1519/-260 = 1779` changed lines (including 1,391 untracked additions). This is the existing Slice 3 cohesive `size:exception`, not an enlarged delivery scope. **Rollback boundary:** revert only the request-journal/completion parser, association parser/reconciliation stages, and these regressions; capture state remains inert and valid Beacon data is untouched. **No delivery/external action:** no commit, push, issue/PR action, publishing, install, browser/TTY/target/network action, or external-repository modification occurred. **Design deviation:** none. Slices 4–7 were not implemented.
+
+## Slice 3 native-review correction
+
+### Structured status and scope
+
+The parent-provided authoritative `gentle-ai.sdd-status@2` was consumed: `guided-beacon-capture`, `openspec`, apply ready, only `/home/pedro/pharos-worktrees/guided-beacon-capture` editable, no warnings. Parent-owned review/attempt lifecycle state was not read or touched. This correction addresses only `R3-promoted-hardlink-mutation` and `R3-unvalidated-completion-time`; Slice 4–7 work and task checkboxes were not changed.
+
+### Correction and TDD Cycle Evidence
+
+| Finding | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|
+| Hard-link mutation | Added an observer-window test that mutates staging after successful hard-link materialization; it failed by returning terminal `promoted`. | Destination digest/size is reverified after the observer window. A mismatch unlinks only this invocation's newly linked destination, retains resolving/staging state, and returns typed corruption. | Existing crash-recovery and pre-existing-destination paths remain covered by the focused suite. | Kept the minimal `linked` ownership flag; no unrelated promotion flow changed. |
+| Completion timestamp | Added invalid and noncanonical `completedAt` cases for promotion and destructive rejection; all four failed by terminalizing/mutating state. | `finishResolution` validates the canonical timestamp before lock/materialization/unlink/session/journal work and returns `capture-store-corruption` for the requested capture. | The four cases cover invalid/noncanonical × promotion/rejection and assert resolving session, staged bytes, and absent destination remain unchanged. | Reused the existing canonical-timestamp validator. |
+
+### Verification and boundary
+
+- `npm test -- tests/adapters/fs-capture-store/fs-capture-store.test.ts`: safety net PASS 72; RED 77 tests with 5 genuine failures; GREEN PASS 77.
+- Required focused command: PASS, 4 files / 84 tests. `npm test`: PASS, 37 files / 412 tests. `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`: PASS (lint has only existing boundaries deprecation warnings).
+- All five untracked candidate files passed no-index whitespace and conflict-marker checks. Runtime harness is temporary filesystem only; no browser, TTY, target, network, install, or external repository action occurred.
+- Correction-only delta from the candidate at task start is source/test `+51/-2 = 53` lines; this evidence entry remains within the 120-line provider limit. Workload boundary is this one Slice 3 correction in the accepted `stacked-to-main`/`size:exception` unit.
+- **Rollback:** revert only the completion-time guard, post-link destination revalidation/owned-link cleanup, and these two regression groups. No unrelated candidate behavior or pre-existing destination is removed. No commit, push, PR/issue, publication, or delivery action occurred; remaining work is Slice 4–7.

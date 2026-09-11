@@ -7,6 +7,7 @@ export {
   type CaptureAssociationConflict,
   type CaptureBeaconAssociation,
   type CaptureId,
+  type CaptureIllegalTransition,
   type CaptureNotFound,
   type CaptureNotPromoted,
   type CaptureRefusal,
