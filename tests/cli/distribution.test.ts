@@ -15,6 +15,11 @@ const repoRoot = path.resolve(
 );
 const SHEBANG = "#!/usr/bin/env node\n";
 const BUILT_ENTRY = path.join(repoRoot, "dist/cli/index.js");
+const schemaPaths = [
+  "dist/contracts/schemas/project-init.schema.json",
+  "dist/contracts/schemas/capture-annotation.schema.json",
+  "dist/contracts/schemas/cli-envelope.schema.json",
+];
 
 async function run(command: string, args: string[], cwd: string) {
   try {
@@ -111,6 +116,9 @@ describe("built and packaged distribution", () => {
     expect(files).toContain("README.md");
     expect(files).toContain("LICENSE");
     expect(files).toContain("dist/cli/index.js");
+    for (const schemaPath of schemaPaths) {
+      expect(files).toContain(schemaPath);
+    }
     for (const file of files) {
       const allowed =
         file === "package.json" ||
@@ -172,6 +180,16 @@ describe("built and packaged distribution", () => {
     );
     const contents = await readFile(installedEntry, "utf8");
     expect(contents.startsWith(SHEBANG)).toBe(true);
+
+    for (const schemaPath of schemaPaths) {
+      const schema = JSON.parse(
+        await readFile(
+          path.join(consumerDir, "node_modules/pharos", schemaPath),
+          "utf8",
+        ),
+      ) as { $schema?: string };
+      expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+    }
 
     const shim = path.join(
       consumerDir,

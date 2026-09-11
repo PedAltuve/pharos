@@ -3,6 +3,7 @@ import type { Result } from "../../shared/result.js";
 export const PROJECT_CONTEXT_CONTRACT = "pharos.project-context/1" as const;
 
 export type ProjectId = `proj_${string}`;
+export type ProjectRequestId = `req_${string}`;
 export type ProjectMode = "repository" | "external";
 export type ProjectEnvironment = "local" | "test" | "staging";
 
@@ -58,7 +59,7 @@ export interface ProjectAssociationMismatch {
 }
 export interface ProjectRequestConflict {
   readonly rule: "project-request-conflict";
-  readonly requestId: string;
+  readonly requestId: ProjectRequestId;
 }
 
 export type ProjectContextRefusal =

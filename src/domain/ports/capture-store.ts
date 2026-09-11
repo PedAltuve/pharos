@@ -1,5 +1,6 @@
 import type { Result } from "../../shared/result.js";
 import type {
+  BeaconId,
   CaptureBeaconAssociation,
   CaptureId,
   CaptureRefusal,
@@ -31,5 +32,5 @@ export interface CaptureStore {
   claimAnnotation(association: CaptureBeaconAssociation): Promise<Result<CaptureBeaconAssociation, CaptureRefusal>>;
   commitAssociation(association: CaptureBeaconAssociation): Promise<Result<CaptureBeaconAssociation, CaptureRefusal>>;
   getAssociationByCapture(projectId: ProjectId, captureId: CaptureId): Promise<Result<CaptureBeaconAssociation | null, CaptureRefusal>>;
-  getAssociationByBeacon(projectId: ProjectId, beaconId: string): Promise<Result<CaptureBeaconAssociation | null, CaptureRefusal>>;
+  getAssociationByBeacon(projectId: ProjectId, beaconId: BeaconId): Promise<Result<CaptureBeaconAssociation | null, CaptureRefusal>>;
 }

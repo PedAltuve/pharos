@@ -33,18 +33,34 @@ export function createProjectContext(input: ProjectContextInput): ProjectContext
   if (input.name.trim().length === 0) return err({ rule: "invalid-project-context", field: "name" });
   if (!isMode(input.mode)) return err({ rule: "invalid-project-context", field: "mode" });
   if (!isEnvironment(input.environment)) return err({ rule: "invalid-project-context", field: "environment" });
-  if (!/^https?:\/\//.test(input.baseUrl)) return err({ rule: "invalid-project-context", field: "baseUrl" });
-  if (Number.isNaN(Date.parse(input.createdAt))) return err({ rule: "invalid-project-context", field: "createdAt" });
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(input.baseUrl);
+  } catch {
+    return err({ rule: "invalid-project-context", field: "baseUrl" });
+  }
+  if (
+    (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") ||
+    baseUrl.hostname.length === 0 ||
+    baseUrl.username.length > 0 ||
+    baseUrl.password.length > 0 ||
+    baseUrl.hash.length > 0
+  ) return err({ rule: "invalid-project-context", field: "baseUrl" });
+
+  const createdAt = new Date(input.createdAt);
+  if (Number.isNaN(createdAt.valueOf()) || createdAt.toISOString() !== input.createdAt) {
+    return err({ rule: "invalid-project-context", field: "createdAt" });
+  }
 
   const context: ProjectContext = {
     contract: PROJECT_CONTEXT_CONTRACT,
     projectId: input.projectId,
     revision: 1,
-    name: input.name,
+    name: input.name.trim(),
     mode: input.mode,
     environment: input.environment,
-    baseUrl: input.baseUrl,
-    createdAt: input.createdAt,
+    baseUrl: baseUrl.toString(),
+    createdAt: createdAt.toISOString(),
   };
   return ok(context);
 }

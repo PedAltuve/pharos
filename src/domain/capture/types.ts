@@ -5,6 +5,7 @@ export const CAPTURE_SESSION_CONTRACT = "pharos.capture-session/1" as const;
 export const CAPTURE_ASSOCIATION_CONTRACT = "pharos.capture-beacon-association/1" as const;
 
 export type CaptureId = `cap_${string}`;
+export type BeaconId = `bcn_${string}`;
 export type RequestId = `req_${string}`;
 export type CaptureStatus = "running" | "post_exit" | "resolving" | "promoted" | "rejected" | "failed" | "interrupted";
 export type CaptureResolution = "promote" | "reject" | "fail" | "interrupt";
@@ -43,7 +44,7 @@ export interface CaptureBeaconAssociation {
   readonly captureId: CaptureId;
   readonly requestId: RequestId;
   readonly inputHash: string;
-  readonly beaconId: `bcn_${string}`;
+  readonly beaconId: BeaconId;
   readonly draftId: `drf_${string}`;
   readonly revision: 1;
   readonly semanticHash?: string;

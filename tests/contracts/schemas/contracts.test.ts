@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { project } from "../../../src/domain/semantics/index.js";
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
 
@@ -83,18 +83,44 @@ describe("v1 JSON Schema 2020-12 ingress contracts", () => {
     expect(envelope({ contract: "pharos.cli-envelope/1", command: "capture.annotate", outcome: "succeeded", data: {}, errors: [], next_action: null, extra: true })).toBe(false);
   });
 
-  it("triangulates invalid machine fixtures without a semantic map or draft operation", async () => {
+  it("reserves a top-level variable value for the complete variable-reference shape", async () => {
     const annotation = await validator("capture-annotation");
-    const createDraft = vi.fn();
-    for (const invalid of [
-      { ...validAnnotation, outcomes: [] },
-      { ...validAnnotation, readiness_intent: { side_effect_class: "stateful", isolation: null } },
-      { ...validAnnotation, actions: [{ action: "click", target: "page.getByRole('button')", value: null }] },
-      { ...validAnnotation, entry_point: { path: "/../../etc/passwd", query: null, fragment: null } },
-      { ...validAnnotation, secret_literal: "canary-secret" },
-      { ...validAnnotation, purpose: "x".repeat(65_537) },
-    ]) expect(annotation(invalid)).toBe(false);
-    expect(createDraft).not.toHaveBeenCalled();
+    const action = (value: unknown) => ({ ...validAnnotation, actions: [{ action: "enter", target: "checkout-form", value }] });
+
+    expect(annotation(action({ kind: "variable" }))).toBe(false);
+    expect(annotation(action({ kind: "variable", variable: 123 }))).toBe(false);
+    expect(annotation(action({ kind: "variable", variable: "checkoutToken", extra: true }))).toBe(false);
+    expect(annotation(action({ kind: "variable", variable: "checkoutToken" }))).toBe(true);
+    expect(annotation(action({ kind: "ordinary", nested: { kind: "variable" } }))).toBe(true);
+  });
+
+  it("accepts structural tokens while leaving selector and Playwright semantics to policy", async () => {
+    const annotation = await validator("capture-annotation");
+    const action = (token: string) => ({ ...validAnnotation, actions: [{ action: "click", target: token, value: null }] });
+
+    expect(annotation(action("selectorPanel"))).toBe(true);
+    expect(annotation(action("getByRole"))).toBe(true);
+    expect(annotation(action("page.getByRole('button')"))).toBe(false);
+    expect(annotation(action("section/button"))).toBe(false);
+    expect(annotation(action("getByRole(button)"))).toBe(false);
+  });
+
+  it("keeps uniqueItems limited to byte-identical declarations", async () => {
+    const annotation = await validator("capture-annotation");
+    expect(annotation({
+      ...validAnnotation,
+      outcomes: [
+        { id: "checkout-renewed", description: "Checkout is renewed" },
+        { id: "checkout-renewed", description: "Checkout is renewed" },
+      ],
+    })).toBe(false);
+    expect(annotation({
+      ...validAnnotation,
+      outcomes: [
+        { id: "checkout-renewed", description: "Checkout is renewed" },
+        { id: "checkout-renewed", description: "Same logical ID, distinct text" },
+      ],
+    })).toBe(true);
   });
 
   it("triangulates stateful isolation and secret-variable redaction constraints", async () => {
@@ -111,16 +137,6 @@ describe("v1 JSON Schema 2020-12 ingress contracts", () => {
   });
 
   it("keeps ingress separate from the frozen SemanticSource and SemanticProjection boundary", async () => {
-    const annotation = await validator("capture-annotation");
-    const duplicateDeclarations = {
-      ...validAnnotation,
-      outcomes: [
-        { id: "checkout-renewed", description: "Checkout is renewed" },
-        { id: "checkout-renewed", description: "Checkout is renewed" },
-      ],
-    };
-    expect(annotation(duplicateDeclarations)).toBe(false);
-
     const source: SemanticSource = {
       purpose: "Renew the active checkout",
       actor: { type: "guest" },

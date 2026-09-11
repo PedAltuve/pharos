@@ -1,10 +1,10 @@
 import type { Result } from "../../shared/result.js";
-import type { ProjectContext, ProjectContextRefusal, ProjectId } from "../project/index.js";
+import type { ProjectContext, ProjectContextRefusal, ProjectId, ProjectRequestId } from "../project/index.js";
 
 export interface InitializeProjectContextCommand {
   readonly context: ProjectContext;
   readonly associationPath: string;
-  readonly requestId: string;
+  readonly requestId: ProjectRequestId;
   readonly inputHash: string;
 }
 

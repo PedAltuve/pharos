@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   CAPTURE_SESSION_CONTRACT,
   annotationEligibility,
   isCaptureId,
 } from "../../../src/domain/capture/index.js";
-import type { CaptureSession } from "../../../src/domain/capture/index.js";
+import type {
+  BeaconId,
+  CaptureRequestConflict,
+  CaptureSession,
+  CaptureStoreCorruption,
+} from "../../../src/domain/capture/index.js";
+import type { CaptureStore } from "../../../src/domain/ports/index.js";
 
 const captureId = "cap_018f47de-7a00-7cc0-8000-000000000001";
 const common = {
@@ -49,5 +55,11 @@ describe("CaptureSession v1 annotation eligibility", () => {
       ok: false,
       error: { rule: "capture-not-promoted", captureId, status: session.status },
     });
+  });
+
+  it("exports the capture refusal types and brands beacon association lookup IDs", () => {
+    expectTypeOf<CaptureRequestConflict["rule"]>().toEqualTypeOf<"capture-request-conflict">();
+    expectTypeOf<CaptureStoreCorruption["rule"]>().toEqualTypeOf<"capture-store-corruption">();
+    expectTypeOf<Parameters<CaptureStore["getAssociationByBeacon"]>[1]>().toEqualTypeOf<BeaconId>();
   });
 });

@@ -12,6 +12,7 @@ export {
   type ProjectContextNotFound,
   type ProjectEnvironment,
   type ProjectId,
+  type ProjectRequestId,
   type ProjectMode,
   type ProjectRequestConflict,
   type ProjectSelectionRequired,
