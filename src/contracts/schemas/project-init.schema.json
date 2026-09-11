@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.dev/contracts/project-init/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "project_name", "mode", "environment", "base_url", "association_path"],
+  "properties": {
+    "contract": { "const": "pharos.project-init/1" },
+    "project_name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "mode": { "enum": ["repository", "external"] },
+    "environment": { "enum": ["local", "test", "staging"] },
+    "base_url": { "type": "string", "pattern": "^https?://[^/@?#]+(?:[:][0-9]+)?(?:/[^?#]*)?(?:[?][^#]*)?$", "maxLength": 4096 },
+    "association_path": { "type": "string", "pattern": "^/", "maxLength": 4096 }
+  }
+}
