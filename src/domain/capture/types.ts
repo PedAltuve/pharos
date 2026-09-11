@@ -21,7 +21,14 @@ export interface CaptureSessionCommon {
 }
 export interface RunningCaptureSession extends CaptureSessionCommon { readonly status: "running"; }
 export interface PostExitCaptureSession extends CaptureSessionCommon { readonly status: "post_exit"; readonly recorderExitedAt: string; }
-export interface ResolvingCaptureSession extends CaptureSessionCommon { readonly status: "resolving"; readonly resolution: CaptureResolution; }
+export interface ResolvingCaptureSession extends CaptureSessionCommon {
+  readonly status: "resolving";
+  readonly resolution: CaptureResolution;
+  /** Durable, safe decision detail required for recovery; never raw capture bytes. */
+  readonly artifact?: PromotedCaptureArtifact;
+  readonly detectionCount?: number;
+  readonly reason?: RejectedCaptureSession["reason"] | FailedCaptureSession["reason"] | InterruptedCaptureSession["reason"];
+}
 export interface PromotedCaptureArtifact { readonly reference: string; readonly byteSize: number; readonly sha256: string; }
 export interface PromotedCaptureSession extends CaptureSessionCommon { readonly status: "promoted"; readonly artifact: PromotedCaptureArtifact; readonly completedAt: string; }
 export interface RejectedCaptureSession extends CaptureSessionCommon { readonly status: "rejected"; readonly reason: "sensitive-content" | "scan-incomplete" | "unsafe-artifact"; readonly detectionCount: number; readonly completedAt: string; }
@@ -35,7 +42,13 @@ export interface CaptureNotPromoted { readonly rule: "capture-not-promoted"; rea
 export interface CaptureRequestConflict { readonly rule: "capture-request-conflict"; readonly requestId: RequestId; }
 export interface CaptureAssociationConflict { readonly rule: "capture-association-conflict"; readonly captureId: CaptureId; }
 export interface CaptureStoreCorruption { readonly rule: "capture-store-corruption"; readonly captureId: CaptureId; }
-export type CaptureRefusal = CaptureNotFound | CaptureNotPromoted | CaptureRequestConflict | CaptureAssociationConflict | CaptureStoreCorruption;
+export interface CaptureIllegalTransition {
+  readonly rule: "capture-illegal-transition";
+  readonly captureId: CaptureId;
+  readonly from: CaptureStatus;
+  readonly to: "post_exit" | "resolving" | "terminal";
+}
+export type CaptureRefusal = CaptureNotFound | CaptureNotPromoted | CaptureRequestConflict | CaptureAssociationConflict | CaptureStoreCorruption | CaptureIllegalTransition;
 
 export interface CaptureBeaconAssociation {
   readonly contract: typeof CAPTURE_ASSOCIATION_CONTRACT;

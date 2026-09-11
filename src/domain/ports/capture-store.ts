@@ -19,7 +19,14 @@ export interface BeginCaptureCommand {
   readonly secretSourceReferences: readonly string[];
   readonly createdAt: string;
 }
-export interface ResolutionRecord { readonly resolution: CaptureResolution; readonly recordedAt: string; readonly artifact?: PromotedCaptureArtifact; readonly detectionCount?: number; }
+export interface ResolutionRecord {
+  readonly resolution: CaptureResolution;
+  readonly recordedAt: string;
+  readonly artifact?: PromotedCaptureArtifact;
+  readonly detectionCount?: number;
+  /** Stable safe category only; raw capture bytes and scanner details are forbidden. */
+  readonly reason?: "sensitive-content" | "scan-incomplete" | "unsafe-artifact" | "recorder-exit" | "recorder-prerequisite-or-process-failure" | "operator-cancelled" | "signal";
+}
 
 /** Owns supporting capture state and associations; it never owns Beacon data. */
 export interface CaptureStore {
