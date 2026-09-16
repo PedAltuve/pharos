@@ -447,3 +447,150 @@ The parent-provided authoritative `gentle-ai.sdd-status@2` was consumed: `guided
 - All five untracked candidate files passed no-index whitespace and conflict-marker checks. Runtime harness is temporary filesystem only; no browser, TTY, target, network, install, or external repository action occurred.
 - Correction-only delta from the candidate at task start is source/test `+51/-2 = 53` lines; this evidence entry remains within the 120-line provider limit. Workload boundary is this one Slice 3 correction in the accepted `stacked-to-main`/`size:exception` unit.
 - **Rollback:** revert only the completion-time guard, post-link destination revalidation/owned-link cleanup, and these two regression groups. No unrelated candidate behavior or pre-existing destination is removed. No commit, push, PR/issue, publication, or delivery action occurred; remaining work is Slice 4–7.
+
+## Slice 4 apply — blocked by protected secret-adapter path
+
+### Structured status consumed
+
+The parent-provided authoritative `gentle-ai.sdd-status@2` was consumed: change `guided-beacon-capture`, store `openspec`, `applyState: ready`, `dependencies.apply: ready`, and `nextRecommended: apply`. The action context is `repo-local`, only `/home/pedro/pharos-worktrees/guided-beacon-capture` is editable, and warnings are empty. Parent-owned attempt authority for `slice-4-recorder-security` was not acquired, inspected, settled, reset, or persisted.
+
+### Strict TDD evidence and current state
+
+| Cycle | Evidence |
+|---|---|
+| RED | Replaced the Slice 3 scaffold test with six focused `RecordCapture` tests for explicit declarations, explicit `--no-secret-sources`, resolve-before-allocation/spawn ordering, reference-only replay identity, durable running before recorder prerequisite failure, disposal after terminalization, and missing/empty-source redaction. The authoritative-worktree focused command failed genuinely: 1 file / 6 failed tests because `RecordCapture` did not exist (`TypeError: RecordCapture is not a constructor`). |
+| GREEN (incomplete) | Added the port-only `RecordCapture` orchestration implementation after RED. The required environment resolver adapter could not be written: the harness blocked `src/adapters/secrets/env-secret-resolver.ts` as a protected sensitive path. No workaround or alternate write path was used. The focused suite has not been claimed green. |
+
+The Slice 4 RED task is visibly checked in `tasks.md` immediately after its failing test evidence. GREEN, TRIANGULATE, and REFACTOR remain visibly unchecked. The persisted task artifact was re-read after this update.
+
+### Files currently changed and boundary
+
+- `tests/application/record-capture.test.ts` — Slice 4 RED tests.
+- `src/application/record-capture.ts` — incomplete post-RED orchestration; it is not completion evidence.
+- `openspec/changes/guided-beacon-capture/tasks.md` — Slice 4 RED checkbox only.
+- `openspec/changes/guided-beacon-capture/apply-progress.md`.
+
+**Interaction required:** grant a safe write authorization for the already user-authorized exact path `src/adapters/secrets/env-secret-resolver.ts`, or provide an approved alternative path within the declared Slice 4 adapter surface. It is required to implement the explicit `env:NAME` resolver promised by the GREEN task; no other path expansion is requested. Until then, recorder/scanner adapters and their tests cannot truthfully be implemented or verified.
+
+**Rollback boundary:** remove only the partial Slice 4 application/test changes and the eventual recorder/secret/scanner adapter behavior; retain Slice 1–3 contracts/storage and non-authoritative CaptureStore records. **No delivery action:** no commit, push, PR/issue operation, browser launch/install, TTY takeover, target contact, network action, publication, or external repository mutation occurred.
+
+## Slice 4 automatic-gatekeeper correction rerun — blocked
+
+The parent provided a fresh remediation attempt for failed evidence `sha256:b8d5ef225f59fddf94710e081dfc0b86385c02b29c874bad207128e7b04a8ebd`; its token and every attempt/review lifecycle operation remained untouched. The prior authoritative apply-ready status and allowed workspace were retained. The strict-TDD guidance was read before resuming.
+
+The human explicitly authorized `src/adapters/secrets/env-secret-resolver.ts`, in addition to the original Slice 4 surfaces. Despite that authorization, the harness blocked writes to both that exact source path and the already-originally-allowed adapter test path `tests/adapters/secrets/env-secret-resolver.test.ts` as protected sensitive paths. No shell or alternate-path bypass was attempted. Because the missing resolver must be exercised by a real adapter test before its implementation, GREEN cannot truthfully complete; TRIANGULATE/REFACTOR and the requested verification commands were not run.
+
+`tasks.md` was re-read: RED remains visibly `[x]`; GREEN, TRIANGULATE, and REFACTOR remain `[ ]`. No checkbox changed in this rerun. Existing partial Slice 4 files are preserved unchanged. **Interaction required:** configure the harness to honor the explicit authorization for both `src/adapters/secrets/env-secret-resolver.ts` and its original allowed test subtree `tests/adapters/secrets/**`, or provide a non-sensitive approved test location within the original Slice 4 scope. No additional production path is requested. No delivery, external, browser, TTY, target, network, install, or publication action occurred.
+
+## Slice 4 apply — secret-resolution rescope complete
+
+### Structured status consumed
+
+Parent-provided `gentle-ai.sdd-status@2` was consumed as authoritative: explicit `guided-beacon-capture`, `openspec`, apply ready, all apply inputs present/done, no blockers or warnings, and `repo-local` action context limited to `/home/pedro/pharos-worktrees/guided-beacon-capture`. The authorized work unit was `slice-4-secret-resolution-rescope`, `stacked-to-main`, accepted `size:exception`, max 2,400 changed lines. The parent-owned opaque attempt token and all acquire/status/settle/reset/rescope/review lifecycle operations were untouched.
+
+### Completed persisted tasks
+
+The task text was safely rescoped from the blocked adapter path to `src/adapters/secret-resolution/**` and `tests/adapters/secret-resolution/**`; no literal blocked directory was created or accessed. The persisted `tasks.md` was re-read after completion. Only Slice 4's remaining implementation-owned rows are now visibly checked:
+
+- GREEN — `RecordCapture` resolves declared values before allocation/spawn, hashes context/input references only, persists/terminalizes through CaptureStore, and disposes values after terminalization; `EnvSecretResolver` handles only `env:NAME` with safe missing/empty refusals.
+- TRIANGULATE — fake Playwright process, resolution, and literal scanner tests cover the public codegen vector, `shell: false`, no runtime install/download, stream isolation, cancellation/non-zero/spawn failure, raw/JSON/percent encodings, short values, symlink/replacement refusal, and safe scan results. Existing temporary-filesystem CaptureStore coverage passed for durable promotion/recovery and no overwrite of an existing destination.
+- REFACTOR — the direct-package CLI resolver and process seam remain adapter-local; scanner returns only a logical artifact reference, size, digest, or stable safe refusal. `RecordCapture` maps incomplete scans to durable `scan-incomplete` instead of a sensitive detection category and does not depend on BeaconStore.
+
+Slice 5–7 implementation-owned rows remain unchecked and byte-for-byte unchanged; they are the exact persisted `- [ ]` rows under task sections 5–7. There are no parent-owned rows.
+
+### Files changed
+
+- `src/application/record-capture.ts`
+- `src/domain/ports/recorder.ts`
+- `src/adapters/playwright/playwright-recorder.ts`
+- `src/adapters/secret-resolution/env-secret-resolver.ts`
+- `src/adapters/sensitivity/literal-sensitivity-scanner.ts`
+- `tests/application/record-capture.test.ts`
+- `tests/adapters/playwright/playwright-recorder.test.ts`
+- `tests/adapters/secret-resolution/env-secret-resolver.test.ts`
+- `tests/adapters/sensitivity/literal-sensitivity-scanner.test.ts`
+- `openspec/changes/guided-beacon-capture/{tasks,apply-progress}.md`
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|
+| GREEN / transient resolution and orchestration | Retained genuine RED: six `RecordCapture is not a constructor` failures. The resumed application focused test also failed for disposal-before-terminal completion. | Added resolver and awaited terminalization; application suite passed 6 tests. | Added incomplete-scan durable-category and interruption/non-zero one-terminal cases; the incomplete category test failed before mapping `scan-incomplete`, then application suite passed 9 tests. | Narrow cancellation-port subscription and terminal-result handling remained green. |
+| TRIANGULATE / recorder, resolver, scanner adapters | New adapter suites failed genuinely with three module-not-found errors. | Implemented direct-package resolver, fake spawn seam, resolver, and private scanner; 11 tests passed. | Staged-replacement test failed before inode comparison; cancellation-with-zero-exit test failed before owned-child cancellation tracking. Both passed after minimal changes; focused suite passed 22 tests. | Tightened Node child-process typing and kept tests green. |
+| REFACTOR / shared gates | N/A: no semantic change after focused green behavior. | Focused Slice 4 command passed. | Full temporary-filesystem CaptureStore safety suite passed 77 tests for durable decision/recovery and existing-destination preservation. | Full suite, lint, typecheck, build, and diff checks passed. |
+
+### Verification and safety
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/application/record-capture.test.ts tests/adapters/playwright tests/adapters/secret-resolution tests/adapters/sensitivity` | PASS: 4 files, 22 tests. |
+| `npm test` | PASS: 40 files, 433 tests; default suite stayed hermetic. |
+| `npm run lint` | PASS; only existing eslint-boundaries deprecation warnings. |
+| `npm run typecheck` | PASS. |
+| `npm run build` | PASS. |
+| `git diff --check` | PASS. |
+| `npm test -- tests/adapters/fs-capture-store/fs-capture-store.test.ts` | PASS: 1 file, 77 tests; local temporary-filesystem recovery/no-overwrite safety evidence. |
+
+All Slice 4 untracked source/test files were checked with `git diff --no-index --check` and conflict-marker scans. No real browser/Chromium, target, network, opt-in probe, TTY takeover, secret logging, download/install, external repository mutation, Beacon call, commit, push, PR/issue action, or publication occurred. Runtime evidence was injected fake process/environment plus temporary local filesystem only.
+
+### Boundary, deviations, and rollback
+
+- **Workload / PR boundary:** Slice 4 only, stacked-to-main, accepted `size:exception`; authored diff against `fab06230a0332526f34e8ab6bae270b5f864ccc1`: **916 additions + 17 deletions = 933 lines**, within 2,400 lines.
+- **Deviation:** user-authorized non-triggering adapter rescope only: `secret-resolution` replaces the blocked reference. Product semantics are unchanged. The tracked `src/adapters/playwright/index.ts` placeholder contains only `export {};`; it pre-existed and was left untouched.
+- **Rollback:** remove only the listed Slice 4 application, port, recorder/resolution/scanner adapters, tests, and task/progress evidence. CaptureStore records remain non-authoritative and already-created data stays inert.
+- **Delivery:** no commit, push, PR, merge, publish, or external action. Next lifecycle remains parent-owned.
+
+## Slice 4 replay-convergence correction
+
+### Structured status and replay decisions
+
+Parent-provided authority was consumed for `guided-beacon-capture`: `openspec`, apply-ready, `repo-local`, and only `/home/pedro/pharos-worktrees/guided-beacon-capture` editable; delivery is Slice 4, `stacked-to-main`, accepted `size:exception`. The fresh parent-held objective token was not read or used.
+
+- `FsCaptureStore.begin()` now compares only stable canonical request identity: project/request IDs, input hash, and order-independent secret references. Generated capture ID and `createdAt` are initial-plan fields; a persisted original session wins replay.
+- `RecordCapture` now uses the session returned from `begin()`: terminal sessions return their original result with no recorder/scanner/transition calls; `running` retries return `capture-process-still-active`; `post_exit` resumes scan/terminalization; `resolving` finishes its durable decision. Resolved secret values remain scanner-only.
+- The four Slice 4 implementation rows were re-read and remain visibly checked; Slice 5–7 rows were not edited. The tracked `src/adapters/playwright/index.ts` is the pre-existing `export {};` placeholder and remains unchanged.
+
+### TDD cycle evidence
+
+| Cycle | Evidence |
+|---|---|
+| Safety net | `npm test -- tests/application/record-capture.test.ts tests/adapters/fs-capture-store/fs-capture-store.test.ts` passed: 86 tests. |
+| RED | New application replay/active/post-exit/resolving tests failed genuinely (4 failures/13); new filesystem advancing-ID/clock replay test failed genuinely (1 failure/78). |
+| GREEN | Minimal replay comparison and returned-session branching passed: 2 files, 91 tests. |
+| TRIANGULATE | Canonical secret-reference ordering replays while changed input conflicts: filesystem suite passed 79 tests. |
+| REFACTOR | Extracted scan/terminalization handling; typecheck and the two-file focused suite passed: 92 tests. |
+
+### Verification, scope, and rollback
+
+| Command | Result |
+|---|---|
+| `npm test -- tests/application/record-capture.test.ts tests/adapters/fs-capture-store/fs-capture-store.test.ts` | PASS: 2 files, 92 tests. |
+| `npm test -- tests/application/record-capture.test.ts tests/adapters/playwright tests/adapters/secret-resolution tests/adapters/sensitivity` | PASS: 4 files, 26 tests. |
+| `npm test` | PASS: 40 files, 439 tests; hermetic. |
+| `npm run lint` | PASS; existing boundaries deprecation warnings only. |
+| `npm run typecheck` / `npm run build` / `git diff --check` | PASS. |
+
+All six untracked Slice 4 candidate files passed `git diff --no-index --check`; no conflict markers were found. Runtime remained injected fake process/environment plus temporary filesystem only—no browser, target, network, install, TTY takeover, secret logging, Beacon call, or external mutation.
+
+**Correction-only size:** source/test delta from the candidate at task start is **+162/-21 = 183** lines. **Workload boundary:** Slice 4 correction only; final Slice 4 diff against `fab06230a0332526f34e8ab6bae270b5f864ccc1`, including six untracked candidate files and OpenSpec evidence, is **+1112/-38 = 1,150** lines, within the 1,200-line correction objective. **Deviation:** none beyond the authorized `secret-resolution` rescope; replay behavior follows the existing design. **Rollback:** revert only the returned-session replay branch, stable-plan comparison, and their regression tests; recorder/resolver/scanner behavior and existing CaptureStore safety remain intact. **No delivery:** no commit, push, issue/PR action, merge, publication, or lifecycle/review operation occurred.
+
+## Slice 4 native-review security correction
+
+**Status consumed:** `guided-beacon-capture` is apply-ready in the authoritative `openspec` store; `repo-local` action context permits only `/home/pedro/pharos-worktrees/guided-beacon-capture`, with no warnings. Parent review/attempt lifecycle authority was not touched.
+
+### TDD Cycle Evidence
+
+| Finding | RED | GREEN / TRIANGULATE / REFACTOR |
+|---|---|---|
+| R1 secret encoding | Single-quoted escaped `don't\\ship` literal passed before detection. | Added bounded JavaScript single-quote encoding; raw/JSON/URI plus escaped forms pass. |
+| R3 cancellation | Delayed resolver and listener-registration aborts spawned one fake child. | Rechecks and registers before spawn; both races return interrupted with zero spawns. |
+| R4 secret replay | Rotated value B scanned the old post-exit artifact and promoted it. | Declared-source post-exit replay durably rejects as `scan-incomplete`; no-secret replay still scans. |
+
+### Verification
+
+- `npm test -- tests/application/record-capture.test.ts tests/adapters/playwright tests/adapters/secret-resolution tests/adapters/sensitivity`: PASS, 4 files / 30 tests.
+- `npm test -- tests/application/record-capture.test.ts tests/adapters/fs-capture-store/fs-capture-store.test.ts`: PASS, 2 files / 93 tests.
+- `npm test`: PASS, 40 files / 443 tests; `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`: PASS (lint has existing deprecation warnings only).
+- Six untracked files passed whitespace/conflict-marker inspection; Slice 4 rows remain checked and Slices 5–7 remain unchanged.
+
+**Correction-only size:** candidate-view comparison is `+158/-19 = 177` lines (≤180). **Runtime / rollback / delivery:** injected fake process and temporary filesystem only; no browser, target, network, install, TTY takeover, secret logging, Beacon call, or external mutation. Revert only these three adapter/application guards and their regression tests. No commit, push, issue, PR, merge, publication, or lifecycle operation occurred; next action is parent lifecycle.

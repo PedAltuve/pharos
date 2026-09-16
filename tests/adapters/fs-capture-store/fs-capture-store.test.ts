@@ -104,6 +104,44 @@ describe("FsCaptureStore lifecycle", () => {
     await expect(store.begin({ ...begin(), inputHash: "sha256:other" })).resolves.toEqual({ ok: false, error: { rule: "capture-request-conflict", requestId } });
   });
 
+  it("replays the persisted identity when generated capture ID and creation time advance", async () => {
+    const store = new FsCaptureStore({ projectRoot: root });
+    const original = await store.begin(begin());
+    const nextCaptureId = "cap_018f47de-7a00-7cc0-8000-000000000002" as CaptureId;
+
+    const replay = await store.begin({
+      ...begin(),
+      captureId: nextCaptureId,
+      createdAt: "2026-03-01T00:01:00.000Z",
+    });
+
+    expect(replay).toEqual(original);
+    await expect(store.getSession(projectId, nextCaptureId)).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-not-found", captureId: nextCaptureId },
+    });
+  });
+
+  it("uses canonical secret-reference order for replay but still rejects changed input", async () => {
+    const store = new FsCaptureStore({ projectRoot: root });
+    const original = await store.begin({ ...begin(), secretSourceReferences: ["env:ALPHA", "env:BETA"] });
+    const nextCaptureId = "cap_018f47de-7a00-7cc0-8000-000000000002" as CaptureId;
+
+    await expect(store.begin({
+      ...begin(),
+      captureId: nextCaptureId,
+      createdAt: "2026-03-01T00:01:00.000Z",
+      secretSourceReferences: ["env:BETA", "env:ALPHA"],
+    })).resolves.toEqual(original);
+    await expect(store.begin({
+      ...begin(),
+      captureId: "cap_018f47de-7a00-7cc0-8000-000000000003" as CaptureId,
+      createdAt: "2026-03-01T00:02:00.000Z",
+      inputHash: "sha256:changed-canonical-input",
+      secretSourceReferences: ["env:BETA", "env:ALPHA"],
+    })).resolves.toEqual({ ok: false, error: { rule: "capture-request-conflict", requestId } });
+  });
+
   it("recovers only a durable promotion decision without overwriting an existing destination", async () => {
     let crash = true;
     const store = new FsCaptureStore({ projectRoot: root, observer: { onStage: (stage: CaptureStoreStage) => {
