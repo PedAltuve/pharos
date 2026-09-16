@@ -63,12 +63,16 @@ function requestHash(requestId: RequestId): string {
 
 function sameRequest(left: StoredRequest, right: BeginCaptureCommand): boolean {
   return left.projectId === right.projectId
-    && left.captureId === right.captureId
     && left.requestId === right.requestId
     && left.inputHash === right.inputHash
-    && left.createdAt === right.createdAt
-    && left.secretSourceReferences.length === right.secretSourceReferences.length
-    && left.secretSourceReferences.every((value, index) => value === right.secretSourceReferences[index]);
+    && sameSecretReferences(left.secretSourceReferences, right.secretSourceReferences);
+}
+
+/** Generated capture identity and creation time belong to the initial plan, not replay identity. */
+function sameSecretReferences(left: readonly string[], right: readonly string[]): boolean {
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.length === sortedRight.length && sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,11 +119,11 @@ function isTerminalStatus(value: unknown): value is TerminalCaptureStatus {
   return value === "promoted" || value === "rejected" || value === "failed" || value === "interrupted";
 }
 
-function requestFrom(value: unknown, captureId: CaptureId, requestId?: RequestId): StoredRequest | undefined {
+function requestFrom(value: unknown, expectedCaptureId?: CaptureId, requestId?: RequestId): StoredRequest | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, value.completion === undefined
     ? ["projectId", "captureId", "requestId", "inputHash", "secretSourceReferences", "createdAt"]
     : ["projectId", "captureId", "requestId", "inputHash", "secretSourceReferences", "createdAt", "completion"])
-    || value.captureId !== captureId
+    || typeof value.captureId !== "string" || !isCaptureId(value.captureId) || (expectedCaptureId !== undefined && value.captureId !== expectedCaptureId)
     || typeof value.projectId !== "string" || !isProjectId(value.projectId)
     || !isRequestId(value.requestId) || (requestId !== undefined && value.requestId !== requestId)
     || typeof value.inputHash !== "string" || value.inputHash.trim().length === 0
@@ -127,7 +131,7 @@ function requestFrom(value: unknown, captureId: CaptureId, requestId?: RequestId
     || !isCanonicalTimestamp(value.createdAt)) return undefined;
   const request: BeginCaptureCommand = {
     projectId: value.projectId,
-    captureId,
+    captureId: value.captureId,
     requestId: value.requestId,
     inputHash: value.inputHash,
     secretSourceReferences: value.secretSourceReferences,
@@ -137,8 +141,8 @@ function requestFrom(value: unknown, captureId: CaptureId, requestId?: RequestId
   if (!isRecord(value.completion)
     || !hasOnlyKeys(value.completion, ["status", "captureId"])
     || !isTerminalStatus(value.completion.status)
-    || value.completion.captureId !== captureId) return undefined;
-  return { ...request, completion: { status: value.completion.status, captureId } };
+    || value.completion.captureId !== value.captureId) return undefined;
+  return { ...request, completion: { status: value.completion.status, captureId: value.captureId } };
 }
 
 function isSafeArtifact(value: unknown, captureId: CaptureId): value is PromotedCaptureArtifact {
@@ -336,23 +340,25 @@ export class FsCaptureStore implements CaptureStore {
       const requested = requestFrom(command, command.captureId, command.requestId);
       if (requested === undefined) return captureRefusal(command.captureId);
       const requestPath = this.requestPath(command.requestId);
-      const existingRequest = await this.readRequest(requestPath, command.captureId, command.requestId);
-      if (!existingRequest.ok) return existingRequest;
+      const existingRequest = await this.readRequest(requestPath, null, command.requestId);
+      if (!existingRequest.ok) return captureRefusal(command.captureId);
+      const plan = existingRequest.value ?? requested;
       if (existingRequest.value !== null) {
         if (!sameRequest(existingRequest.value, command)) {
           return err({ rule: "capture-request-conflict", requestId: command.requestId });
         }
-        const stored = await this.getSessionUnlocked(command.captureId);
+        const stored = await this.getSessionUnlocked(plan.captureId);
         if (stored.ok) {
-          if (existingRequest.value.completion !== undefined && existingRequest.value.completion.status !== stored.value.status) return captureRefusal(command.captureId);
+          if (plan.completion !== undefined && plan.completion.status !== stored.value.status) return captureRefusal(plan.captureId);
           return stored;
         }
         if (stored.error.rule !== "capture-not-found") return stored;
-        if (existingRequest.value.completion !== undefined) return captureRefusal(command.captureId);
+        if (plan.completion !== undefined) return captureRefusal(plan.captureId);
+      } else {
+        await writePrivateJson(requestPath, requested);
       }
-      await writePrivateJson(requestPath, requested);
-      await ensurePrivateDirectory(this.stageDirectory(command.captureId));
-      const session: CaptureSession = { ...command, contract: CAPTURE_SESSION_CONTRACT, status: "running" };
+      await ensurePrivateDirectory(this.stageDirectory(plan.captureId));
+      const session: CaptureSession = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "running" };
       await this.writeSession(session);
       return ok(session);
     } finally {
@@ -578,12 +584,13 @@ export class FsCaptureStore implements CaptureStore {
     catch (error) { return isErrno(error, "ENOENT") ? err({ rule: "capture-not-found", captureId }) : captureRefusal(captureId); }
   }
 
-  private async readRequest(path: string, captureId: CaptureId, requestId: RequestId): Promise<Result<StoredRequest | null, CaptureRefusal>> {
+  private async readRequest(path: string, expectedCaptureId: CaptureId | null, requestId: RequestId): Promise<Result<StoredRequest | null, CaptureRefusal>> {
+    const refusalCaptureId = expectedCaptureId ?? "cap_invalid" as CaptureId;
     try {
-      const parsed = requestFrom(await readJson(path), captureId, requestId);
-      return parsed === undefined ? captureRefusal(captureId) : ok(parsed);
+      const parsed = requestFrom(await readJson(path), expectedCaptureId ?? undefined, requestId);
+      return parsed === undefined ? captureRefusal(refusalCaptureId) : ok(parsed);
     } catch (error) {
-      return isErrno(error, "ENOENT") ? ok(null) : captureRefusal(captureId);
+      return isErrno(error, "ENOENT") ? ok(null) : captureRefusal(refusalCaptureId);
     }
   }
 

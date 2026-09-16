@@ -1,7 +1,11 @@
 import type { CaptureId } from "../capture/index.js";
 import type { ProjectId } from "../project/index.js";
 
-export interface CancellationSignal { readonly aborted: boolean; }
+export interface CancellationSignal {
+  readonly aborted: boolean;
+  /** Optional adapter-neutral subscription used only to stop an owned child. */
+  onAbort?(listener: () => void): () => void;
+}
 export type RecorderTerminalMode = "human" | "json";
 export interface RecordCaptureCommand {
   readonly projectId: ProjectId;
