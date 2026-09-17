@@ -13,6 +13,8 @@ import type {
   SecretResolver,
   SensitivityScanner,
 } from "../domain/ports/index.js";
+import type { CaptureResolutionDecision } from "../domain/ports/capture-store.js";
+import type { RecorderRun } from "../domain/ports/recorder.js";
 import { err, ok, type Result } from "../shared/result.js";
 
 export interface RecordCaptureRequest {
@@ -87,8 +89,13 @@ export class RecordCapture {
     const { values: resolvedSecrets, dispose } = resolved.value;
 
     try {
-      const recovered = await this.dependencies.store.recover(request.projectId);
-      if (!recovered.ok) return recovered;
+      const recovery = await this.dependencies.store.recoverProject(request.projectId, this.now());
+      if (!recovery.ok) return recovery;
+      for (const session of recovery.value.blocked) {
+        const blocked = await this.convergeBlockedSession(request.projectId, session);
+        if (blocked !== undefined) return err(blocked);
+      }
+
       const proposedCaptureId = this.dependencies.ids.next("capture") as CaptureId;
       const createdAt = this.now();
       const inputHash = this.dependencies.hasher.hash({
@@ -98,7 +105,7 @@ export class RecordCapture {
         terminalMode: request.terminalMode,
         url: request.url,
       });
-      const begun = await this.dependencies.store.begin({
+      const begun = await this.dependencies.store.beginLaunch({
         projectId: request.projectId,
         captureId: proposedCaptureId,
         requestId: request.requestId,
@@ -107,32 +114,11 @@ export class RecordCapture {
         createdAt,
       });
       if (!begun.ok) return begun;
-
-      const session = begun.value;
-      if (session.status === "promoted" || session.status === "rejected" || session.status === "failed" || session.status === "interrupted") {
-        return terminalResult(session);
-      }
-      if (session.status === "resolving") {
-        const terminal = await this.dependencies.store.finishResolution(request.projectId, session.captureId, this.now());
-        return terminal.ok ? terminalResult(terminal.value) : terminal;
-      }
-      if (session.status === "post_exit") {
-        return session.secretSourceReferences.length === 0
-          ? await this.scanAndTerminalize(request.projectId, session.captureId, resolvedSecrets)
-          : await this.terminalize(request.projectId, session.captureId, "reject", "scan-incomplete", undefined, 0);
-      }
-      if (session.recorder !== undefined) {
-        // A live or reused PID is never treated as ours; only observed absence permits recovery.
-        if (await this.dependencies.recorder.isProcessActive(session.recorder)) {
-          return err({ rule: "capture-process-still-active", captureId: session.captureId });
-        }
-        return await this.terminalize(request.projectId, session.captureId, "interrupt", "signal");
-      }
-      // A crash between child spawn and recorder-PID persistence leaves no safe recovery evidence.
-      if (session.captureId !== proposedCaptureId || session.createdAt !== createdAt) {
-        return err({ rule: "capture-process-still-active", captureId: session.captureId });
+      if (!begun.value.claimed) {
+        return await this.routeUnclaimedSession(request, begun.value.session, resolvedSecrets);
       }
 
+      const session = begun.value.session;
       const run = await this.dependencies.recorder.start({
         projectId: request.projectId,
         captureId: session.captureId,
@@ -141,34 +127,9 @@ export class RecordCapture {
         signal: request.signal,
       });
       const completion = run.waitForCompletion();
-      if (run.evidence === undefined) return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
-
-      const persistence = this.dependencies.store.recordRecorderStarted(request.projectId, session.captureId, run.evidence)
-        .then((started) => started.ok, () => false);
-      const recorderCompletion = completion.then((recorder) => ({ kind: "completion" as const, recorder }));
-      let notifyAbort!: () => void;
-      const aborted = new Promise<void>((resolveAbort) => { notifyAbort = resolveAbort; });
-      const removeAbort = request.signal.onAbort(notifyAbort);
-      if (request.signal.aborted) notifyAbort();
-      try {
-        const first = await Promise.race([
-          recorderCompletion,
-          persistence.then((persisted) => ({ kind: "persistence" as const, persisted })),
-          aborted.then(() => ({ kind: "aborted" as const })),
-        ]);
-        if (first.kind === "completion") {
-          if ((first.recorder.kind === "process-still-active" || first.recorder.kind === "unpersisted-process") && !await persistence) return new Promise<Result<RecordedCapture, RecordCaptureRefusal>>(() => {});
-          return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
-        }
-        if (first.kind === "aborted" || !first.persisted) run.stop();
-        const recorder = await completion;
-        if ((recorder.kind === "process-still-active" || recorder.kind === "unpersisted-process")
-          && (first.kind === "persistence" ? !first.persisted : !await persistence)) return new Promise<Result<RecordedCapture, RecordCaptureRefusal>>(() => {});
-        return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
-      } finally {
-        removeAbort();
-      }
-      return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
+      const persistence = { failed: false };
+      if (run.evidence !== undefined) this.persistRecorderEvidence(request.projectId, session.captureId, run, persistence);
+      return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets, request.signal, persistence);
     } finally {
       dispose();
     }
@@ -179,17 +140,90 @@ export class RecordCapture {
       || (!request.noSecretSources && request.secretSourceReferences.length > 0);
   }
 
+  private async convergeBlockedSession(
+    projectId: ProjectId,
+    session: Extract<CaptureSession, { status: "launching" | "recording" }>,
+  ): Promise<RecordCaptureRefusal | undefined> {
+    if (session.status === "launching") {
+      return { rule: "capture-process-still-active", captureId: session.captureId };
+    }
+    // Recovery never signals the observed PID. Reuse is handled as absence of the original child.
+    const probe = await this.dependencies.recorder.probeProcess(session.recorder);
+    if (probe === "same" || probe === "unknown") {
+      return { rule: "capture-process-still-active", captureId: session.captureId };
+    }
+    const terminal = await this.terminalize(projectId, session.captureId, "interrupt", "signal");
+    return terminal.ok ? undefined : terminal.error;
+  }
+
+  private async routeUnclaimedSession(
+    request: RecordCaptureRequest,
+    session: CaptureSession,
+    resolvedSecrets: ReadonlyMap<string, string>,
+  ): Promise<Result<RecordedCapture, RecordCaptureRefusal>> {
+    if (session.status === "promoted" || session.status === "rejected" || session.status === "failed" || session.status === "interrupted") {
+      return terminalResult(session);
+    }
+    if (session.status === "resolving") {
+      const terminal = await this.dependencies.store.resolve(request.projectId, session.captureId, this.resolutionFrom(session), this.now());
+      return terminal.ok ? terminalResult(terminal.value) : terminal;
+    }
+    if (session.status === "post_exit") {
+      return session.secretSourceReferences.length === 0
+        ? await this.scanAndTerminalize(request.projectId, session.captureId, resolvedSecrets)
+        : await this.terminalize(request.projectId, session.captureId, "reject", "scan-incomplete", undefined, 0);
+    }
+    if (session.status === "recording") {
+      const probe = await this.dependencies.recorder.probeProcess(session.recorder);
+      if (probe === "same" || probe === "unknown") {
+        return err({ rule: "capture-process-still-active", captureId: session.captureId });
+      }
+      return await this.terminalize(request.projectId, session.captureId, "interrupt", "signal");
+    }
+    if (session.status === "launching") {
+      return err({ rule: "capture-process-still-active", captureId: session.captureId });
+    }
+    return err({ rule: "capture-illegal-transition", captureId: session.captureId, from: "pending", to: "launching" });
+  }
+
+  private persistRecorderEvidence(
+    projectId: ProjectId,
+    captureId: CaptureId,
+    run: RecorderRun,
+    persistence: { failed: boolean },
+  ): void {
+    if (run.evidence === undefined) return;
+    void this.dependencies.store.recordRecorderStarted(projectId, captureId, run.evidence).then(
+      (started) => {
+        if (!started.ok) {
+          persistence.failed = true;
+          run.contain();
+        }
+      },
+      () => {
+        persistence.failed = true;
+        run.contain();
+      },
+    );
+  }
+
   private async completeRecorder(
     captureId: CaptureId,
     projectId: ProjectId,
     completion: Promise<RecorderResult>,
     resolvedSecrets: ReadonlyMap<string, string>,
+    signal: CancellationSignal,
+    persistence: { readonly failed: boolean },
   ): Promise<Result<RecordedCapture, RecordCaptureRefusal>> {
     const recorder = await completion;
-    if (recorder.kind === "process-still-active" || recorder.kind === "unpersisted-process") {
+    if (recorder.kind === "process-still-active") {
       return err({ rule: "capture-process-still-active", captureId });
     }
-    if (recorder.kind === "operator-cancelled") return await this.terminalize(projectId, captureId, "interrupt", "operator-cancelled");
+    if (recorder.kind === "operator-cancelled") {
+      return persistence.failed && !signal.aborted
+        ? await this.terminalize(projectId, captureId, "fail", "recorder-prerequisite-or-process-failure")
+        : await this.terminalize(projectId, captureId, "interrupt", "operator-cancelled");
+    }
     if (recorder.kind === "signalled") return await this.terminalize(projectId, captureId, "interrupt", "signal");
     if (recorder.kind === "prerequisite-or-process-failure") {
       return await this.terminalize(projectId, captureId, "fail", "recorder-prerequisite-or-process-failure");
@@ -222,16 +256,22 @@ export class RecordCapture {
     artifact?: { readonly reference: string; readonly byteSize: number; readonly sha256: string },
     detectionCount?: number,
   ): Promise<Result<RecordedCapture, CaptureRefusal>> {
-    const decision = await this.dependencies.store.recordResolution(projectId, captureId, {
+    const terminal = await this.dependencies.store.resolve(projectId, captureId, {
       resolution,
-      recordedAt: this.now(),
       reason,
       artifact,
       detectionCount,
-    });
-    if (!decision.ok) return decision;
-    const terminal = await this.dependencies.store.finishResolution(projectId, captureId, this.now());
+    }, this.now());
     return terminal.ok ? terminalResult(terminal.value) : terminal;
+  }
+
+  private resolutionFrom(session: Extract<CaptureSession, { status: "resolving" }>): CaptureResolutionDecision {
+    return {
+      resolution: session.resolution,
+      reason: session.reason,
+      artifact: session.artifact,
+      detectionCount: session.detectionCount,
+    };
   }
 
   private now(): string {

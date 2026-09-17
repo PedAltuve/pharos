@@ -1,7 +1,75 @@
 import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const transientReadFailure = vi.hoisted(() => ({
+  enabled: false,
+  lockPath: "",
+  arm(lockPath: string): void {
+    this.enabled = true;
+    this.lockPath = lockPath;
+  },
+}));
+
+const directoryOpenGate = vi.hoisted(() => {
+  let notifyOpened!: () => void;
+  let continueRelease!: () => void;
+  return {
+    enabled: false,
+    projectDir: "",
+    opened: Promise.resolve(),
+    wait: Promise.resolve(),
+    arm(projectDir: string): void {
+      this.enabled = true;
+      this.projectDir = projectDir;
+      this.opened = new Promise<void>((resolve) => {
+        notifyOpened = resolve;
+      });
+      this.wait = new Promise<void>((resolve) => {
+        continueRelease = resolve;
+      });
+      this.notifyOpened = () => {
+        notifyOpened();
+      };
+      this.continueRelease = () => {
+        continueRelease();
+      };
+    },
+    notifyOpened(): void {},
+    continueRelease(): void {},
+  };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...fs,
+    readFile: async (...args: Parameters<typeof fs.readFile>) => {
+      if (
+        transientReadFailure.enabled
+        && args[0] === transientReadFailure.lockPath
+      ) {
+        transientReadFailure.enabled = false;
+        throw new Error("transient lock read failure");
+      }
+      return fs.readFile(...args);
+    },
+    open: async (...args: Parameters<typeof fs.open>) => {
+      if (
+        directoryOpenGate.enabled
+        && args[0] === directoryOpenGate.projectDir
+        && args[1] === "r"
+      ) {
+        directoryOpenGate.enabled = false;
+        directoryOpenGate.notifyOpened();
+        await directoryOpenGate.wait;
+      }
+      return fs.open(...args);
+    },
+  };
+});
+
 import { ProjectLock } from "../../../src/adapters/fs-beacon-store/lock.js";
 import type { LockUnavailable } from "../../../src/domain/ports/beacon-store-refusals.js";
 
@@ -162,7 +230,8 @@ describe("ProjectLock release", () => {
     const acquired = await lock.acquire();
     expect(acquired.ok).toBe(true);
 
-    await lock.release();
+    if (!acquired.ok) throw new Error("lock was not acquired");
+    await acquired.value.release();
 
     await expect(readFile(join(projectDir, "lock"), "utf8")).rejects.toThrow(/ENOENT/);
     expect((await readdir(projectDir)).filter((entry) => entry.includes("probe.tmp.")).sort()).toEqual([]);
@@ -182,7 +251,43 @@ describe("ProjectLock release", () => {
       }),
     );
 
-    await expect(lock.release()).rejects.toThrow(/nonce/);
+    if (!acquired.ok) throw new Error("lock was not acquired");
+    await expect(acquired.value.release()).rejects.toThrow(/nonce/);
     expect(await readFile(lockPath, "utf8")).toContain("foreign-nonce");
+  });
+
+  it("keeps a lease active after a transient release failure", async () => {
+    const lockPath = join(projectDir, "lock");
+    const acquired = await new ProjectLock(projectDir).acquire();
+    if (!acquired.ok) throw new Error("lock was not acquired");
+
+    transientReadFailure.arm(lockPath);
+    await expect(acquired.value.release()).rejects.toThrow(/transient lock read failure/);
+    await acquired.value.release();
+
+    await expect(readFile(lockPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("keeps an overlapping lease's ownership intact until that lease releases", async () => {
+    const lock = new ProjectLock(projectDir);
+    const first = await lock.acquire();
+    if (!first.ok) throw new Error("first lock was not acquired");
+
+    directoryOpenGate.arm(projectDir);
+    const releasingFirst = first.value.release();
+    await directoryOpenGate.opened;
+    await expect(first.value.release()).rejects.toThrow(/already being released/);
+
+    const second = await lock.acquire();
+    if (!second.ok) throw new Error("second lock was not acquired");
+
+    directoryOpenGate.continueRelease();
+    await releasingFirst;
+    const secondHolder = await readFile(join(projectDir, "lock"), "utf8");
+    await expect(first.value.release()).rejects.toThrow(/already been released/);
+    expect(await readFile(join(projectDir, "lock"), "utf8")).toBe(secondHolder);
+    await second.value.release();
+
+    await expect(readFile(join(projectDir, "lock"), "utf8")).rejects.toThrow(/ENOENT/);
   });
 });

@@ -16,7 +16,7 @@ import type { CaptureSessionCommon, RecorderProcessEvidence } from "../../domain
 import type { ProjectId } from "../../domain/project/index.js";
 import { CAPTURE_SESSION_CONTRACT, isCaptureId } from "../../domain/capture/index.js";
 import { isProjectId } from "../../domain/project/index.js";
-import type { BeginCaptureCommand, CaptureStore, ResolutionRecord } from "../../domain/ports/capture-store.js";
+import type { BeginCaptureCommand, BeginLaunchRefusal, CaptureResolutionDecision, CaptureStore } from "../../domain/ports/capture-store.js";
 import { err, ok, type Result } from "../../shared/result.js";
 import { ensurePrivateDirectory, isErrno, readJson, writePrivateJson } from "../fs-project/filesystem.js";
 import { ProjectLock } from "../fs-project/project-lock.js";
@@ -24,6 +24,7 @@ import { ProjectLock } from "../fs-project/project-lock.js";
 const STAGED_RECORDING = "recording.spec.ts";
 const PROMOTED_RECORDING = "recording.spec.ts";
 const SHA256 = /^[a-f0-9]{64}$/;
+const LEGACY_CAPTURE_SESSION_CONTRACT = "pharos.capture-session/1";
 
 type TerminalCaptureStatus = "promoted" | "rejected" | "failed" | "interrupted";
 type StoredRequest = BeginCaptureCommand & {
@@ -40,6 +41,7 @@ type StoredResolving = Extract<CaptureSession, { status: "resolving" }> & Resolv
 export type CaptureStoreStage =
   | "before-session-write"
   | "session-written"
+  | "pending-written"
   | "resolution-decision-recorded"
   | "promoted-materialized"
   | "stage-unlinked"
@@ -121,6 +123,16 @@ function isTerminalStatus(value: unknown): value is TerminalCaptureStatus {
 
 function isRecorderProcessEvidence(value: unknown): value is RecorderProcessEvidence {
   return isRecord(value)
+    && hasOnlyKeys(value, ["pid", "identity"])
+    && typeof value.pid === "number"
+    && Number.isSafeInteger(value.pid)
+    && value.pid > 0
+    && typeof value.identity === "string"
+    && /^[a-f0-9]{64}$/.test(value.identity);
+}
+
+function isLegacyRecorderPidEvidence(value: unknown): boolean {
+  return isRecord(value)
     && hasOnlyKeys(value, ["pid"])
     && typeof value.pid === "number"
     && Number.isSafeInteger(value.pid)
@@ -166,7 +178,7 @@ function isSafeArtifact(value: unknown, captureId: CaptureId): value is Promoted
 
 function commonFrom(value: Record<string, unknown>, captureId: CaptureId): CaptureSessionCommon | undefined {
   if (
-    value.contract !== CAPTURE_SESSION_CONTRACT
+    (value.contract !== CAPTURE_SESSION_CONTRACT && value.contract !== LEGACY_CAPTURE_SESSION_CONTRACT)
     || value.captureId !== captureId
     || typeof value.projectId !== "string" || !isProjectId(value.projectId)
     || !isRequestId(value.requestId)
@@ -190,11 +202,16 @@ function sessionFrom(value: unknown, captureId: CaptureId): Result<CaptureSessio
   const common = commonFrom(value, captureId);
   if (common === undefined) return captureRefusal(captureId);
   const commonKeys = ["contract", "projectId", "captureId", "requestId", "inputHash", "secretSourceReferences", "createdAt", "status"];
-  if (value.status === "running") {
-    if (hasOnlyKeys(value, commonKeys)) return ok({ ...common, status: "running" });
-    if (hasOnlyKeys(value, [...commonKeys, "recorder"]) && isRecorderProcessEvidence(value.recorder)) {
-      return ok({ ...common, status: "running", recorder: value.recorder });
+  if (value.status === "running" && value.contract === LEGACY_CAPTURE_SESSION_CONTRACT) {
+    // Legacy PID evidence is observational only and is never adopted as owned.
+    if (hasOnlyKeys(value, commonKeys) || (hasOnlyKeys(value, [...commonKeys, "recorder"]) && isLegacyRecorderPidEvidence(value.recorder))) {
+      return ok({ ...common, status: "launching" });
     }
+  }
+  if (value.contract === CAPTURE_SESSION_CONTRACT && value.status === "pending" && hasOnlyKeys(value, commonKeys)) return ok({ ...common, status: "pending" });
+  if (value.contract === CAPTURE_SESSION_CONTRACT && value.status === "launching" && hasOnlyKeys(value, commonKeys)) return ok({ ...common, status: "launching" });
+  if (value.contract === CAPTURE_SESSION_CONTRACT && value.status === "recording" && hasOnlyKeys(value, [...commonKeys, "recorder"]) && isRecorderProcessEvidence(value.recorder)) {
+    return ok({ ...common, status: "recording", recorder: value.recorder });
   }
   if (value.status === "post_exit" && hasOnlyKeys(value, [...commonKeys, "recorderExitedAt"]) && isCanonicalTimestamp(value.recorderExitedAt)) {
     return ok({ ...common, status: "post_exit", recorderExitedAt: value.recorderExitedAt });
@@ -249,11 +266,11 @@ function commonOf(session: CaptureSession): CaptureSessionCommon {
   };
 }
 
-function transitionRefusal(captureId: CaptureId, from: CaptureSession["status"], to: "post_exit" | "resolving" | "terminal"): Result<never, CaptureRefusal> {
+function transitionRefusal(captureId: CaptureId, from: CaptureSession["status"], to: "launching" | "recording" | "post_exit" | "resolving" | "terminal"): Result<never, CaptureRefusal> {
   return err({ rule: "capture-illegal-transition", captureId, from, to });
 }
 
-function detailFor(record: ResolutionRecord, captureId: CaptureId): Result<ResolvingDetails, CaptureRefusal> {
+function detailFor(record: CaptureResolutionDecision, captureId: CaptureId): Result<ResolvingDetails, CaptureRefusal> {
   if (record.resolution === "promote") {
     if (record.artifact === undefined || !isSafeArtifact(record.artifact, captureId)) return captureRefusal(captureId);
     return ok({ resolution: "promote", artifact: record.artifact });
@@ -272,6 +289,25 @@ function detailFor(record: ResolutionRecord, captureId: CaptureId): Result<Resol
   const reason = record.reason ?? "operator-cancelled";
   return reason === "operator-cancelled" || reason === "signal"
     ? ok({ resolution: "interrupt", reason }) : captureRefusal(captureId);
+}
+
+function sameResolution(details: ResolvingDetails, session: CaptureSession): boolean {
+  if (session.status === "resolving") {
+    return session.resolution === details.resolution
+      && session.reason === details.reason
+      && session.detectionCount === details.detectionCount
+      && session.artifact?.reference === details.artifact?.reference
+      && session.artifact?.byteSize === details.artifact?.byteSize
+      && session.artifact?.sha256 === details.artifact?.sha256;
+  }
+  if (details.resolution === "promote") return session.status === "promoted"
+    && session.artifact.reference === details.artifact?.reference
+    && session.artifact.byteSize === details.artifact?.byteSize
+    && session.artifact.sha256 === details.artifact?.sha256;
+  if (details.resolution === "reject") return session.status === "rejected"
+    && session.reason === details.reason && session.detectionCount === details.detectionCount;
+  if (details.resolution === "fail") return session.status === "failed" && session.reason === details.reason;
+  return session.status === "interrupted" && session.reason === details.reason;
 }
 
 const beaconIdPattern = new RegExp(`^bcn_${UUID_V7}$`);
@@ -344,49 +380,80 @@ export class FsCaptureStore implements CaptureStore {
     this.observer = options.observer;
   }
 
-  async begin(command: BeginCaptureCommand): Promise<Result<CaptureSession, CaptureRefusal>> {
+  async beginLaunch(command: BeginCaptureCommand): Promise<Result<{ readonly session: CaptureSession; readonly claimed: boolean }, BeginLaunchRefusal>> {
     if (!isCaptureId(command.captureId)) return err({ rule: "capture-not-found", captureId: command.captureId });
-    await this.prepare();
-    const acquired = await this.lock.acquire();
-    if (!acquired.ok) throw new Error("capture project lock is unavailable");
-    try {
-      const requested = requestFrom(command, command.captureId, command.requestId);
-      if (requested === undefined) return captureRefusal(command.captureId);
-      const requestPath = this.requestPath(command.requestId);
-      const existingRequest = await this.readRequest(requestPath, null, command.requestId);
-      if (!existingRequest.ok) return captureRefusal(command.captureId);
-      const plan = existingRequest.value ?? requested;
-      if (existingRequest.value !== null) {
-        if (!sameRequest(existingRequest.value, command)) {
-          return err({ rule: "capture-request-conflict", requestId: command.requestId });
-        }
-        const stored = await this.getSessionUnlocked(plan.captureId);
-        if (stored.ok) {
-          if (plan.completion !== undefined && plan.completion.status !== stored.value.status) return captureRefusal(plan.captureId);
-          return stored;
-        }
+    return this.withLease(() => this.beginUnlocked(command));
+  }
+
+  private async beginUnlocked(command: BeginCaptureCommand): Promise<Result<{ readonly session: CaptureSession; readonly claimed: boolean }, BeginLaunchRefusal>> {
+    const requested = requestFrom(command, command.captureId, command.requestId);
+    if (requested === undefined) return captureRefusal(command.captureId);
+    const requestPath = this.requestPath(command.requestId);
+    const existingRequest = await this.readRequest(requestPath, null, command.requestId);
+    if (!existingRequest.ok) return captureRefusal(command.captureId);
+    const plan = existingRequest.value ?? requested;
+    let session: CaptureSession;
+    if (existingRequest.value !== null) {
+      if (!sameRequest(existingRequest.value, command)) {
+        return err({ rule: "capture-request-conflict", requestId: command.requestId });
+      }
+      const stored = await this.getSessionUnlocked(plan.captureId);
+      if (stored.ok) {
+        if (plan.completion !== undefined && plan.completion.status !== stored.value.status) return captureRefusal(plan.captureId);
+        if (stored.value.status !== "pending") return ok({ session: stored.value, claimed: false });
+        const active = await this.activeProjectSession(command.projectId, stored.value.captureId);
+        if (!active.ok) return active;
+        if (active.value !== null) return err({ rule: "capture-process-still-active", captureId: active.value.captureId });
+        session = stored.value;
+      } else {
         if (stored.error.rule !== "capture-not-found") return stored;
         if (plan.completion !== undefined) return captureRefusal(plan.captureId);
-      } else {
-        await writePrivateJson(requestPath, requested);
+        const active = await this.activeProjectSession(command.projectId, plan.captureId);
+        if (!active.ok) return active;
+        if (active.value !== null) return err({ rule: "capture-process-still-active", captureId: active.value.captureId });
+        await ensurePrivateDirectory(this.stageDirectory(plan.captureId));
+        session = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "pending" };
+        await this.writeSession(session);
+        await this.notify("pending-written", session.captureId);
       }
+    } else {
+      const active = await this.activeProjectSession(command.projectId, plan.captureId);
+      if (!active.ok) return active;
+      if (active.value !== null) return err({ rule: "capture-process-still-active", captureId: active.value.captureId });
+      await writePrivateJson(requestPath, requested);
       await ensurePrivateDirectory(this.stageDirectory(plan.captureId));
-      const session: CaptureSession = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "running" };
+      session = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "pending" };
       await this.writeSession(session);
-      return ok(session);
-    } finally {
-      await this.lock.release();
+      await this.notify("pending-written", session.captureId);
     }
+    const launching: Extract<CaptureSession, { status: "launching" }> = { ...commonOf(session), status: "launching" };
+    await this.writeSession(launching);
+    return ok({ session: launching, claimed: true });
+  }
+
+  private async activeProjectSession(
+    projectId: ProjectId,
+    exceptCaptureId: CaptureId,
+  ): Promise<Result<CaptureSession | null, CaptureRefusal>> {
+    for (const captureId of await this.captureIds()) {
+      if (captureId === exceptCaptureId) continue;
+      const read = await this.getSessionUnlocked(captureId);
+      if (!read.ok) return read;
+      if (read.value.projectId === projectId && !isTerminalStatus(read.value.status)) return ok(read.value);
+    }
+    return ok(null);
   }
 
   async recordRecorderStarted(projectId: ProjectId, captureId: CaptureId, evidence: RecorderProcessEvidence): Promise<Result<CaptureSession, CaptureRefusal>> {
     return this.mutate(captureId, async (session) => {
       if (session.projectId !== projectId || !isRecorderProcessEvidence(evidence)) return captureRefusal(captureId);
-      if (session.status !== "running") return transitionRefusal(captureId, session.status, "resolving");
-      if (session.recorder !== undefined) {
-        return session.recorder.pid === evidence.pid ? ok(session) : captureRefusal(captureId);
+      if (session.status === "recording") {
+        return session.recorder.pid === evidence.pid && session.recorder.identity === evidence.identity
+          ? ok(session)
+          : captureRefusal(captureId);
       }
-      const next: CaptureSession = { ...commonOf(session), status: "running", recorder: evidence };
+      if (session.status !== "launching") return transitionRefusal(captureId, session.status, "recording");
+      const next: CaptureSession = { ...commonOf(session), status: "recording", recorder: evidence };
       await this.writeSession(next);
       return ok(next);
     });
@@ -395,72 +462,72 @@ export class FsCaptureStore implements CaptureStore {
   async markPostExit(projectId: ProjectId, captureId: CaptureId, exitedAt: string): Promise<Result<CaptureSession, CaptureRefusal>> {
     return this.mutate(captureId, async (session) => {
       if (session.projectId !== projectId) return captureRefusal(captureId);
-      if (session.status !== "running") return transitionRefusal(captureId, session.status, "post_exit");
+      if (session.status !== "launching" && session.status !== "recording") return transitionRefusal(captureId, session.status, "post_exit");
       const next: CaptureSession = { ...commonOf(session), status: "post_exit", recorderExitedAt: exitedAt };
       await this.writeSession(next);
       return ok(next);
     });
   }
 
-  async recordResolution(projectId: ProjectId, captureId: CaptureId, record: ResolutionRecord): Promise<Result<CaptureSession, CaptureRefusal>> {
-    return this.mutate(captureId, async (session) => {
-      if (session.projectId !== projectId) return captureRefusal(captureId);
-      const allowed = (record.resolution === "promote" || record.resolution === "reject")
-        ? session.status === "post_exit"
-        : session.status === "running";
-      if (!allowed) return transitionRefusal(captureId, session.status, "resolving");
-      const details = detailFor(record, captureId);
-      if (!details.ok) return details;
-      const next: StoredResolving = { ...commonOf(session), status: "resolving", ...details.value };
-      await this.writeSession(next);
-      await this.notify("resolution-decision-recorded", captureId);
-      return ok(next);
-    });
-  }
-
-  async finishResolution(projectId: ProjectId, captureId: CaptureId, completedAt: string): Promise<Result<CaptureSession, CaptureRefusal>> {
+  async resolve(projectId: ProjectId, captureId: CaptureId, decision: CaptureResolutionDecision, completedAt: string): Promise<Result<CaptureSession, CaptureRefusal>> {
     if (!isCanonicalTimestamp(completedAt)) return captureRefusal(captureId);
     return this.mutate(captureId, async (session) => {
       if (session.projectId !== projectId) return captureRefusal(captureId);
-      if (isTerminalStatus(session.status)) {
-        const completion = await this.writeRequestCompletion(session);
-        return completion.ok ? ok(session) : completion;
-      }
-      if (session.status !== "resolving") return transitionRefusal(captureId, session.status, "terminal");
-      const resolving = session as StoredResolving;
-      const next = await this.completeResolution(resolving, completedAt);
-      if (!next.ok) return next;
-      await this.writeSession(next.value);
-      const completion = await this.writeRequestCompletion(next.value);
-      if (!completion.ok) return completion;
-      return next;
+      return this.resolveUnlocked(
+        session,
+        decision,
+        completedAt,
+        (status, resolution) => (resolution === "promote" || resolution === "reject")
+          ? status === "post_exit"
+          : status === "launching" || status === "recording",
+      );
     });
   }
 
-  async recover(projectId: ProjectId): Promise<Result<readonly CaptureSession[], CaptureRefusal>> {
-    await this.prepare();
-    const acquired = await this.lock.acquire();
-    if (!acquired.ok) throw new Error("capture project lock is unavailable");
-    try {
+  async recoverProject(projectId: ProjectId, recoveredAt: string): Promise<Result<{
+    readonly recovered: readonly Extract<CaptureSession, { status: "promoted" | "rejected" | "failed" | "interrupted" }>[];
+    readonly blocked: readonly Extract<CaptureSession, { status: "launching" | "recording" }>[];
+  }, CaptureRefusal>> {
+    if (!isCanonicalTimestamp(recoveredAt)) return captureRefusal("cap_invalid" as CaptureId);
+    return this.withLease(async () => {
       await this.sweepStaleTemps();
-      const captures = await this.captureIds();
-      const recovered: CaptureSession[] = [];
-      for (const captureId of captures) {
+      const recovered: Extract<CaptureSession, { status: "promoted" | "rejected" | "failed" | "interrupted" }>[] = [];
+      const blocked: Extract<CaptureSession, { status: "launching" | "recording" }>[] = [];
+      for (const captureId of await this.captureIds()) {
         const read = await this.getSessionUnlocked(captureId);
         if (!read.ok) return read;
-        if (read.value.projectId !== projectId) continue;
-        if (read.value.status !== "resolving") continue;
-        const finished = await this.completeResolution(read.value as StoredResolving, new Date().toISOString());
+        const session = read.value;
+        if (session.projectId !== projectId) continue;
+        if (session.status === "launching" || session.status === "recording") {
+          blocked.push(session);
+          continue;
+        }
+        if (isTerminalStatus(session.status)) continue;
+        let finished: Result<CaptureSession, CaptureRefusal>;
+        if (session.status === "pending") {
+          finished = await this.resolveUnlocked(
+            session,
+            { resolution: "fail", reason: "recorder-prerequisite-or-process-failure" },
+            recoveredAt,
+            (status) => status === "pending",
+          );
+        } else if (session.status === "post_exit") {
+          finished = await this.resolveUnlocked(
+            session,
+            { resolution: "reject", reason: "scan-incomplete", detectionCount: 0 },
+            recoveredAt,
+            (status) => status === "post_exit",
+          );
+        } else if (session.status === "resolving") {
+          finished = await this.completeStoredResolutionUnlocked(session, recoveredAt);
+        } else {
+          return captureRefusal(session.captureId);
+        }
         if (!finished.ok) return finished;
-        await this.writeSession(finished.value);
-        const completion = await this.writeRequestCompletion(finished.value);
-        if (!completion.ok) return completion;
-        recovered.push(finished.value);
+        recovered.push(finished.value as Extract<CaptureSession, { status: "promoted" | "rejected" | "failed" | "interrupted" }>);
       }
-      return ok(recovered);
-    } finally {
-      await this.lock.release();
-    }
+      return ok({ recovered, blocked });
+    });
   }
 
   async getSession(projectId: ProjectId, captureId: CaptureId): Promise<Result<CaptureSession, CaptureRefusal>> {
@@ -491,6 +558,49 @@ export class FsCaptureStore implements CaptureStore {
     const forward = await this.readAssociationFile(this.captureAssociationPath(reverse.value.captureId), projectId, reverse.value.captureId, beaconId);
     if (!forward.ok || forward.value === null || !sameAssociation(reverse.value, forward.value)) return captureRefusal(reverse.value.captureId);
     return reverse;
+  }
+
+  private async resolveUnlocked(
+    session: CaptureSession,
+    decision: CaptureResolutionDecision,
+    completedAt: string,
+    mayResolve: (status: CaptureSession["status"], resolution: CaptureResolution) => boolean,
+  ): Promise<Result<CaptureSession, CaptureRefusal>> {
+    const details = detailFor(decision, session.captureId);
+    if (!details.ok) return details;
+    if (isTerminalStatus(session.status)) {
+      if (!sameResolution(details.value, session)) {
+        return err({ rule: "capture-resolution-conflict", captureId: session.captureId });
+      }
+      const completion = await this.writeRequestCompletion(session);
+      return completion.ok ? ok(session) : completion;
+    }
+    let resolving: StoredResolving;
+    if (session.status === "resolving") {
+      if (!sameResolution(details.value, session)) {
+        return err({ rule: "capture-resolution-conflict", captureId: session.captureId });
+      }
+      resolving = session;
+    } else {
+      if (!mayResolve(session.status, decision.resolution)) {
+        return transitionRefusal(session.captureId, session.status, "resolving");
+      }
+      resolving = { ...commonOf(session), status: "resolving", ...details.value };
+      await this.writeSession(resolving);
+      await this.notify("resolution-decision-recorded", session.captureId);
+    }
+    return this.completeStoredResolutionUnlocked(resolving, completedAt);
+  }
+
+  private async completeStoredResolutionUnlocked(
+    resolving: StoredResolving,
+    completedAt: string,
+  ): Promise<Result<CaptureSession, CaptureRefusal>> {
+    const next = await this.completeResolution(resolving, completedAt);
+    if (!next.ok) return next;
+    await this.writeSession(next.value);
+    const completion = await this.writeRequestCompletion(next.value);
+    return completion.ok ? next : completion;
   }
 
   private async completeResolution(session: StoredResolving, completedAt: string): Promise<Result<CaptureSession, CaptureRefusal>> {
@@ -573,14 +683,21 @@ export class FsCaptureStore implements CaptureStore {
     } finally { await handle.close(); }
   }
 
-  private async mutate(captureId: CaptureId, operation: (session: CaptureSession) => Promise<Result<CaptureSession, CaptureRefusal>>): Promise<Result<CaptureSession, CaptureRefusal>> {
+  private async withLease<T>(operation: () => Promise<T>): Promise<T> {
     await this.prepare();
     const acquired = await this.lock.acquire();
     if (!acquired.ok) throw new Error("capture project lock is unavailable");
+    const lease = acquired.value;
     try {
+      return await operation();
+    } finally { await lease.release(); }
+  }
+
+  private async mutate(captureId: CaptureId, operation: (session: CaptureSession) => Promise<Result<CaptureSession, CaptureRefusal>>): Promise<Result<CaptureSession, CaptureRefusal>> {
+    return this.withLease(async () => {
       const session = await this.getSessionUnlocked(captureId);
       return session.ok ? operation(session.value) : session;
-    } finally { await this.lock.release(); }
+    });
   }
 
   private async prepare(): Promise<void> {
@@ -669,6 +786,7 @@ export class FsCaptureStore implements CaptureStore {
     if (!requested.ok || requested.value.state !== expectedState) return captureRefusal(association.captureId);
     const acquired = await this.lock.acquire();
     if (!acquired.ok) throw new Error("capture project lock is unavailable");
+    const lease = acquired.value;
     try {
       const forward = await this.readAssociationFile(this.captureAssociationPath(association.captureId), association.projectId, association.captureId, association.beaconId);
       if (!forward.ok) return forward;
@@ -700,7 +818,7 @@ export class FsCaptureStore implements CaptureStore {
         await this.notify("association-beacon-written", target.captureId);
       }
       return ok(target);
-    } finally { await this.lock.release(); }
+    } finally { await lease.release(); }
   }
 
   private async notify(stage: CaptureStoreStage, captureId: CaptureId): Promise<void> {

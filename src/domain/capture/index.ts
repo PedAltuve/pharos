@@ -12,6 +12,7 @@ export {
   type CaptureNotPromoted,
   type CaptureRefusal,
   type CaptureRequestConflict,
+  type CaptureResolutionConflict,
   type CaptureStoreCorruption,
   type CaptureResolution,
   type CaptureSession,
@@ -24,5 +25,7 @@ export {
   type RejectedCaptureSession,
   type RequestId,
   type ResolvingCaptureSession,
-  type RunningCaptureSession,
+  type PendingCaptureSession,
+  type LaunchingCaptureSession,
+  type RecordingCaptureSession,
 } from "./types.js";

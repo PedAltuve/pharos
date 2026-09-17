@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { ProcessIdentityAdapter } from "../../../src/adapters/playwright/process-identity.js";
 import {
   PlaywrightRecorder,
   type RecorderProcess,
@@ -8,6 +10,11 @@ import {
 const projectId = "proj_018f47de-7a00-7cc0-8000-000000000001" as const;
 const captureId = "cap_018f47de-7a00-7cc0-8000-000000000001" as const;
 const url = "http://localhost:3000/";
+const recorderIdentity = "a".repeat(64);
+const testIdentity = {
+  async observe() { return { kind: "present" as const, identity: recorderIdentity }; },
+  async probe(evidence: { readonly identity: string }) { return evidence.identity === recorderIdentity ? "same" as const : "reused" as const; },
+};
 
 function fakeProcess(result: { readonly code: number | null; readonly signal: string | null }): RecorderProcess & { readonly kills: string[] } {
   const kills: string[] = [];
@@ -77,6 +84,7 @@ async function settle(): Promise<void> {
 function recorder(spawn: RecorderSpawn) {
   return new PlaywrightRecorder({
     projectRoot: "/private/pharos/store/project",
+    identity: testIdentity,
     resolveCli: async () => "/private/node_modules/playwright/cli.js",
     spawn,
   });
@@ -87,6 +95,165 @@ function command(signal = passiveSignal()) {
 }
 
 describe("PlaywrightRecorder", () => {
+  it("probes Linux process identity with final-parenthesis stat parsing and preserves absent, reused, and unknown", async () => {
+    const fingerprint = createHash("sha256").update("linux\nabcdef01-2345-6789-abcd-ef0123456789\n987").digest("hex");
+    const same = new ProcessIdentityAdapter({
+      platform: "linux",
+      readFile: async (path) => path.endsWith("boot_id") ? "abcdef01-2345-6789-abcd-ef0123456789\n" : `42 (web worker) S ${new Array(18).fill("0").join(" ")} 987`,
+      execFile: async () => ({ stdout: "" }),
+    });
+    await expect(same.probe({ pid: 42, identity: fingerprint })).resolves.toBe("same");
+    await expect(same.probe({ pid: 42, identity: "a".repeat(64) })).resolves.toBe("reused");
+    const absent = new ProcessIdentityAdapter({
+      platform: "linux",
+      readFile: async (path) => {
+        if (path.endsWith("boot_id")) return "abcdef01-2345-6789-abcd-ef0123456789\n";
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      },
+      execFile: async () => ({ stdout: "" }),
+    });
+    await expect(absent.probe({ pid: 42, identity: fingerprint })).resolves.toBe("absent");
+    const absentWithoutBootId = new ProcessIdentityAdapter({
+      platform: "linux",
+      readFile: async (path) => {
+        if (path.endsWith("boot_id")) throw new Error("boot identity unavailable");
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      },
+      execFile: async () => ({ stdout: "" }),
+    });
+    await expect(absentWithoutBootId.probe({ pid: 42, identity: fingerprint })).resolves.toBe("absent");
+    const unknown = new ProcessIdentityAdapter({
+      platform: "linux",
+      readFile: async () => "malformed stat",
+      execFile: async () => ({ stdout: "" }),
+    });
+    await expect(unknown.probe({ pid: 42, identity: fingerprint })).resolves.toBe("unknown");
+  });
+
+  it("probes macOS ownership markers through injected unlimited-width ps output", async () => {
+    const token = "c".repeat(64);
+    const fingerprint = createHash("sha256").update(`darwin-token\n${token}`).digest("hex");
+    const calls: unknown[][] = [];
+    const adapter = new ProcessIdentityAdapter({
+      platform: "darwin",
+      readFile: async () => "",
+      execFile: async (...args) => {
+        calls.push(args);
+        return { stdout: `playwright codegen PHAROS_RECORDER_OWNERSHIP=${token}\n` };
+      },
+    });
+    await expect(adapter.probe({ pid: 42, identity: fingerprint })).resolves.toBe("same");
+    await expect(adapter.probe({ pid: 42, identity: "a".repeat(64) })).resolves.toBe("reused");
+    expect(calls[0]).toEqual(["/bin/ps", ["eww", "-p", "42", "-o", "command="], { env: { LC_ALL: "C" } }]);
+    const noMarker = new ProcessIdentityAdapter({
+      platform: "darwin",
+      readFile: async () => "",
+      execFile: async () => ({ stdout: "playwright codegen Mon Jan  2 03:04:05 2023\n" }),
+    });
+    await expect(noMarker.probe({ pid: 42, identity: fingerprint })).resolves.toBe("unknown");
+    const malformedMarker = new ProcessIdentityAdapter({
+      platform: "darwin",
+      readFile: async () => "",
+      execFile: async () => ({ stdout: "playwright PHAROS_RECORDER_OWNERSHIP=invalid\n" }),
+    });
+    await expect(malformedMarker.probe({ pid: 42, identity: fingerprint })).resolves.toBe("unknown");
+    const absent = new ProcessIdentityAdapter({
+      platform: "darwin",
+      readFile: async () => "",
+      execFile: async () => { throw Object.assign(new Error("missing process"), { code: 1, stdout: "", stderr: "" }); },
+    });
+    await expect(absent.probe({ pid: 42, identity: fingerprint })).resolves.toBe("absent");
+  });
+
+  it("keeps an exit observed before internal containment in the same turn", async () => {
+    let resolveIdentity!: (value: { readonly kind: "unknown" }) => void;
+    let resolveExit!: (value: { readonly code: number | null; readonly signal: string | null }) => void;
+    const child = {
+      pid: 4242,
+      kills: [] as string[],
+      kill(signal: string) { this.kills.push(signal); },
+      waitForExit: () => new Promise<{ readonly code: number | null; readonly signal: string | null }>((resolve) => { resolveExit = resolve; }),
+    } as RecorderProcess & { readonly kills: string[] };
+    const target = new PlaywrightRecorder({
+      projectRoot: "/private/pharos/store/project",
+      resolveCli: async () => "/private/node_modules/playwright/cli.js",
+      spawn: (() => child) as RecorderSpawn,
+      identity: {
+        observe: () => new Promise((resolve) => { resolveIdentity = resolve; }),
+        async probe() { return "unknown" as const; },
+      },
+    });
+    const starting = target.start(command());
+    await settle();
+    resolveExit({ code: 0, signal: null });
+    await settle();
+    resolveIdentity({ kind: "unknown" });
+    const run = await starting;
+    await expect(run.waitForCompletion()).resolves.toEqual({ kind: "exited", exitCode: 0 });
+    expect(child.kills).toEqual([]);
+  });
+
+  it("maps internal containment observed before exit in the same turn to prerequisite failure", async () => {
+    let resolveIdentity!: (value: { readonly kind: "unknown" }) => void;
+    let resolveExit!: (value: { readonly code: number | null; readonly signal: string | null }) => void;
+    const child = {
+      pid: 4242,
+      kills: [] as string[],
+      kill(signal: string) { this.kills.push(signal); },
+      waitForExit: () => new Promise<{ readonly code: number | null; readonly signal: string | null }>((resolve) => { resolveExit = resolve; }),
+    } as RecorderProcess & { readonly kills: string[] };
+    const target = new PlaywrightRecorder({
+      projectRoot: "/private/pharos/store/project",
+      resolveCli: async () => "/private/node_modules/playwright/cli.js",
+      spawn: (() => child) as RecorderSpawn,
+      identity: {
+        observe: () => new Promise((resolve) => { resolveIdentity = resolve; }),
+        async probe() { return "unknown" as const; },
+      },
+    });
+    const starting = target.start(command());
+    await settle();
+    resolveIdentity({ kind: "unknown" });
+    await settle();
+    resolveExit({ code: 0, signal: null });
+    const run = await starting;
+    await expect(run.waitForCompletion()).resolves.toEqual({ kind: "prerequisite-or-process-failure" });
+    expect(child.kills).toEqual(["SIGINT"]);
+  });
+
+  it("contains a spawned child when identity observation rejects without losing observer ownership", async () => {
+    const cancellation = cancellationSignal();
+    let resolveExit!: (value: { readonly code: number | null; readonly signal: string | null }) => void;
+    let waitForExitCalls = 0;
+    const child: RecorderProcess & { readonly kills: string[] } = {
+      pid: 4242,
+      kills: [],
+      kill(signal) { this.kills.push(signal); },
+      waitForExit() {
+        waitForExitCalls += 1;
+        return new Promise((resolve) => { resolveExit = resolve; });
+      },
+    };
+    const target = new PlaywrightRecorder({
+      projectRoot: "/private/pharos/store/project",
+      resolveCli: async () => "/private/node_modules/playwright/cli.js",
+      spawn: (() => child) as RecorderSpawn,
+      identity: {
+        async observe() { throw new Error("identity unavailable"); },
+        async probe() { return "unknown" as const; },
+      },
+    });
+
+    const run = await target.start(command(cancellation.signal));
+    await settle();
+    expect(child.kills).toEqual(["SIGINT"]);
+    expect(waitForExitCalls).toBe(1);
+    expect(cancellation.removals).toBe(0);
+    resolveExit({ code: null, signal: "SIGINT" });
+    await expect(run.waitForCompletion()).resolves.toEqual({ kind: "prerequisite-or-process-failure" });
+    expect(cancellation.removals).toBe(1);
+  });
+
   it("uses only the public codegen argument vector with shell disabled and human inherited streams", async () => {
     const calls: unknown[][] = [];
     const cancellation = cancellationSignal();
@@ -106,9 +273,54 @@ describe("PlaywrightRecorder", () => {
       "--output",
       `/private/pharos/store/project/capture-staging/${captureId}/recording.spec.ts`,
       url,
-    ], { shell: false, stdio: "inherit" }]]);
+    ], {
+      shell: false,
+      stdio: "inherit",
+      env: expect.objectContaining({ PHAROS_RECORDER_OWNERSHIP: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    }]]);
     expect((calls[0]?.[1] as readonly string[]).join(" ")).not.toContain("install");
     expect((calls[0]?.[1] as readonly string[]).join(" ")).not.toContain("npx");
+  });
+
+  it("passes a deterministic ownership marker to spawn and persists only its fingerprint", async () => {
+    const token = "d".repeat(64);
+    const expectedIdentity = createHash("sha256").update(`darwin-token\n${token}`).digest("hex");
+    const calls: unknown[][] = [];
+    const target = new PlaywrightRecorder({
+      projectRoot: "/private/pharos/store/project",
+      resolveCli: async () => "/private/node_modules/playwright/cli.js",
+      spawn: ((...args) => {
+        calls.push(args);
+        return fakeProcess({ code: 0, signal: null });
+      }) as RecorderSpawn,
+      ownershipToken: () => token,
+      identity: new ProcessIdentityAdapter({
+        platform: "darwin",
+        readFile: async () => "",
+        execFile: async () => ({ stdout: `playwright PHAROS_RECORDER_OWNERSHIP=${token}` }),
+      }),
+    });
+    const run = await target.start(command());
+    expect(calls[0]?.[2]).toEqual({
+      shell: false,
+      stdio: "inherit",
+      env: expect.objectContaining({ PHAROS_RECORDER_OWNERSHIP: token }),
+    });
+    expect(run.evidence).toEqual({ pid: 4242, identity: expectedIdentity });
+    expect(JSON.stringify(run.evidence)).not.toContain(token);
+  });
+
+  it("fails closed without spawning when ownership token generation is invalid", async () => {
+    let spawnCalls = 0;
+    const target = new PlaywrightRecorder({
+      projectRoot: "/private/pharos/store/project",
+      resolveCli: async () => "/private/node_modules/playwright/cli.js",
+      spawn: (() => { spawnCalls += 1; return fakeProcess({ code: 0, signal: null }); }) as RecorderSpawn,
+      ownershipToken: () => "invalid",
+      identity: testIdentity,
+    });
+    await expect(target.record(command())).resolves.toEqual({ kind: "prerequisite-or-process-failure" });
+    expect(spawnCalls).toBe(0);
   });
 
   it("isolates stdout in JSON mode and classifies non-zero and spawn failures without a browser", async () => {
@@ -123,7 +335,11 @@ describe("PlaywrightRecorder", () => {
     await expect(jsonRecorder.record({ ...command(), terminalMode: "json" })).resolves.toEqual({ kind: "exited", exitCode: 12 });
     await expect(unavailable.record(command(cancellation.signal))).resolves.toEqual({ kind: "prerequisite-or-process-failure" });
     expect(cancellation.removals).toBe(1);
-    expect(jsonCalls[0]?.[2]).toEqual({ shell: false, stdio: ["inherit", "ignore", "inherit"] });
+    expect(jsonCalls[0]?.[2]).toEqual({
+      shell: false,
+      stdio: ["inherit", "ignore", "inherit"],
+      env: expect.objectContaining({ PHAROS_RECORDER_OWNERSHIP: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    });
   });
 
   it("does not spawn when pre-spawn cancellation occurs while CLI resolution is pending", async () => {
@@ -164,7 +380,7 @@ describe("PlaywrightRecorder", () => {
     expect(spawnCalls).toBe(0);
   });
 
-  it("exposes spawned PID evidence with an attached exit observer and probes PID liveness conservatively", async () => {
+  it("exposes spawned PID and fingerprint evidence with an attached exit observer", async () => {
     let waitForExitCalls = 0;
     const child = fakeProcess({ code: 0, signal: null });
     const target = new PlaywrightRecorder({
@@ -174,15 +390,15 @@ describe("PlaywrightRecorder", () => {
         waitForExitCalls += 1;
         return { code: 0, signal: null };
       } })) as RecorderSpawn,
-      probeProcess: (pid) => pid === 4242,
+      identity: testIdentity,
     });
 
     const run = await target.start(command());
-    expect(run.evidence).toEqual({ pid: 4242 });
+    expect(run.evidence).toEqual({ pid: 4242, identity: recorderIdentity });
     expect(waitForExitCalls).toBe(1);
     await expect(run.waitForCompletion()).resolves.toEqual({ kind: "exited", exitCode: 0 });
-    await expect(target.isProcessActive({ pid: 4242 })).resolves.toBe(true);
-    await expect(target.isProcessActive({ pid: 4243 })).resolves.toBe(false);
+    await expect(target.probeProcess({ pid: 4242, identity: recorderIdentity })).resolves.toBe("same");
+    await expect(target.probeProcess({ pid: 4242, identity: "b".repeat(64) })).resolves.toBe("reused");
   });
 
   it("maps an unsolicited child signal to the safe signal result without sending a signal", async () => {
@@ -335,7 +551,7 @@ describe("PlaywrightRecorder", () => {
     expect(cancellation.removals).toBe(1);
   });
 
-  it("contains a safe-PID child after cancellation when its exit observer rejects", async () => {
+  it("does not wait an extra grace after SIGKILL when its exit observer rejects", async () => {
     const cancellation = cancellationSignal();
     const delays = controlledDelays();
     let rejectExit!: (reason?: unknown) => void;
@@ -351,6 +567,7 @@ describe("PlaywrightRecorder", () => {
       projectRoot: "/private/pharos/store/project",
       resolveCli: async () => "/private/node_modules/playwright/cli.js",
       spawn: (() => child) as RecorderSpawn,
+      identity: testIdentity,
       cancellationGraceMs: 50,
       delay: delays.delay,
     });
@@ -362,7 +579,7 @@ describe("PlaywrightRecorder", () => {
     await settle();
     expect(child.kills).toEqual(["SIGINT"]);
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       delays.releaseNext();
       await settle();
     }
@@ -370,7 +587,7 @@ describe("PlaywrightRecorder", () => {
     await expect(recording).resolves.toEqual({ kind: "process-still-active" });
     expect(waitForExitCalls).toBe(1);
     expect(child.kills).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
-    expect(delays.disposed).toEqual([true, true, true]);
+    expect(delays.disposed).toEqual([true, true]);
     expect(cancellation.removals).toBe(1);
   });
 
@@ -414,7 +631,7 @@ describe("PlaywrightRecorder", () => {
     expect(child.kills).toEqual(["SIGINT"]);
   });
 
-  it("contains an invalid-PID child by consuming its rejecting exit and bounded owned-child shutdown", async () => {
+  it("classifies an async spawn error without a PID as a prerequisite failure", async () => {
     const cancellation = cancellationSignal();
     const delays = controlledDelays();
     let waitForExitCalls = 0;
@@ -439,16 +656,10 @@ describe("PlaywrightRecorder", () => {
 
     const run = await target.start(command(cancellation.signal));
     expect(run.evidence).toBeUndefined();
-    await settle();
-    expect(child.kills).toEqual(["SIGINT"]);
-    delays.releaseNext();
-    await settle();
-    delays.releaseNext();
-    await settle();
-    delays.releaseNext();
-    await expect(run.waitForCompletion()).resolves.toEqual({ kind: "unpersisted-process" });
+    await expect(run.waitForCompletion()).resolves.toEqual({ kind: "prerequisite-or-process-failure" });
+    expect(child.kills).toEqual([]);
     expect(waitForExitCalls).toBe(1);
-    expect(delays.disposed).toEqual([true, true, true]);
+    expect(delays.disposed).toEqual([]);
     expect(cancellation.removals).toBe(1);
   });
 });

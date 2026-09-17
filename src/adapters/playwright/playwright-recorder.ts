@@ -1,8 +1,11 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { Recorder, RecordCaptureCommand, RecorderResult, RecorderRun } from "../../domain/ports/recorder.js";
+import type { RecorderProcessEvidence } from "../../domain/capture/types.js";
+import { ProcessIdentityAdapter, RECORDER_OWNERSHIP_MARKER, type ProcessIdentityObservation, type ProcessProbe } from "./process-identity.js";
 
 const require = createRequire(import.meta.url);
 const RECORDING = "recording.spec.ts";
@@ -11,7 +14,7 @@ type RecorderStdio = "inherit" | ["inherit", "ignore", "inherit"];
 type RecorderSignal = "SIGINT" | "SIGTERM" | "SIGKILL";
 type RecorderExit = { readonly code: number | null; readonly signal: string | null };
 type ExitObservation = { readonly kind: "exit"; readonly value: RecorderExit } | { readonly kind: "failure" };
-type StopReason = "operator" | "unpersisted";
+type ShutdownReason = "operator" | "contain";
 
 export interface RecorderProcess {
   readonly pid: number | undefined;
@@ -22,12 +25,17 @@ export interface RecorderDelay {
   readonly elapsed: Promise<void>;
   dispose(): void;
 }
-export type RecorderSpawn = (executable: string, arguments_: readonly string[], options: { readonly shell: false; readonly stdio: RecorderStdio }) => RecorderProcess;
+export type RecorderSpawn = (executable: string, arguments_: readonly string[], options: { readonly shell: false; readonly stdio: RecorderStdio; readonly env: NodeJS.ProcessEnv }) => RecorderProcess;
+export interface ProcessIdentity {
+  observe(pid: number): Promise<ProcessIdentityObservation>;
+  probe(evidence: RecorderProcessEvidence): Promise<ProcessProbe>;
+}
 export interface PlaywrightRecorderOptions {
   readonly projectRoot: string;
   readonly resolveCli?: () => Promise<string>;
   readonly spawn?: RecorderSpawn;
-  readonly probeProcess?: (pid: number) => boolean;
+  readonly identity?: ProcessIdentity;
+  readonly ownershipToken?: () => string;
   readonly cancellationGraceMs?: number;
   readonly delay?: (milliseconds: number) => RecorderDelay;
 }
@@ -45,10 +53,10 @@ async function declaredPlaywrightCli(): Promise<string> {
   return resolve(dirname(manifestPath), bin);
 }
 
-function nodeSpawn(executable: string, arguments_: readonly string[], options: { readonly shell: false; readonly stdio: RecorderStdio }): RecorderProcess {
+function nodeSpawn(executable: string, arguments_: readonly string[], options: { readonly shell: false; readonly stdio: RecorderStdio; readonly env: NodeJS.ProcessEnv }): RecorderProcess {
   const child: ChildProcess = options.stdio === "inherit"
-    ? spawnChild(executable, arguments_, { shell: false, stdio: "inherit" })
-    : spawnChild(executable, arguments_, { shell: false, stdio: ["inherit", "ignore", "inherit"] });
+    ? spawnChild(executable, arguments_, { shell: false, stdio: "inherit", env: options.env })
+    : spawnChild(executable, arguments_, { shell: false, stdio: ["inherit", "ignore", "inherit"], env: options.env });
   return {
     pid: child.pid,
     kill(signal) { child.kill(signal); },
@@ -59,16 +67,6 @@ function nodeSpawn(executable: string, arguments_: readonly string[], options: {
       });
     },
   };
-}
-
-function processAppearsActive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    return code !== "ESRCH";
-  }
 }
 
 function nodeDelay(milliseconds: number): RecorderDelay {
@@ -85,15 +83,15 @@ class FinalizedRecorderRun implements RecorderRun {
   readonly evidence = undefined;
   constructor(private readonly result: RecorderResult) {}
   async waitForCompletion(): Promise<RecorderResult> { return this.result; }
-  stop(): void {}
+  contain(): void {}
 }
 
 class OwnedRecorderRun implements RecorderRun {
-  readonly evidence: { readonly pid: number } | undefined;
+  evidence: RecorderProcessEvidence | undefined;
   private readonly stopped: Promise<void>;
   private readonly complete: Promise<RecorderResult>;
   private notifyStop!: () => void;
-  private stopReason: StopReason | undefined;
+  private shutdownReason: ShutdownReason | undefined;
   private exitObservation: ExitObservation | undefined;
   private stopPrecedesExit = false;
   private signalsSent = 0;
@@ -103,8 +101,8 @@ class OwnedRecorderRun implements RecorderRun {
     private readonly delay: (milliseconds: number) => RecorderDelay,
     private readonly graceMs: number,
   ) {
-    this.evidence = isSafePid(child.pid) ? { pid: child.pid } : undefined;
     this.stopped = new Promise((resolveStop) => { this.notifyStop = resolveStop; });
+    // This is deliberately attached before any process identity lookup.
     const exit = child.waitForExit().then(
       (value): ExitObservation => {
         const observation = { kind: "exit", value } as const;
@@ -120,24 +118,29 @@ class OwnedRecorderRun implements RecorderRun {
     this.complete = this.observe(exit);
   }
 
-  stop(): void {
-    this.requestStop(this.evidence === undefined ? "unpersisted" : "operator");
+  setEvidence(evidence: RecorderProcessEvidence): void {
+    this.evidence = evidence;
   }
 
-  stopForUnpersistedEvidence(): void {
-    this.requestStop("unpersisted");
+  cancelByOperator(): void {
+    this.requestShutdown("operator");
+  }
+
+  contain(): void {
+    this.requestShutdown("contain");
   }
 
   waitForCompletion(): Promise<RecorderResult> {
     return this.complete;
   }
 
-  private requestStop(reason: StopReason): void {
-    if (this.stopReason !== undefined) return;
-    this.stopReason = reason;
+  private requestShutdown(reason: ShutdownReason): void {
+    if (this.shutdownReason !== undefined) return;
+    this.shutdownReason = reason;
     queueMicrotask(() => {
+      // Preserve the observer's same-turn provenance before assigning containment.
       this.stopPrecedesExit = this.exitObservation?.kind !== "exit";
-      if (this.stopPrecedesExit) this.sendNextSignal();
+      if (this.stopPrecedesExit && isSafePid(this.child.pid)) this.sendNextSignal();
       this.notifyStop();
     });
   }
@@ -145,14 +148,21 @@ class OwnedRecorderRun implements RecorderRun {
   private async observe(exit: Promise<ExitObservation>): Promise<RecorderResult> {
     const first = await Promise.race([exit, this.stopped.then(() => undefined)]);
     if (first !== undefined) {
-      if (first.kind === "failure") return await this.resultForFailedObservation();
+      if (first.kind === "failure" && this.shutdownReason !== undefined && isSafePid(this.child.pid)) {
+        return await this.finishFailedObservation();
+      }
       return this.resultFor(first);
+    }
+    if (!isSafePid(this.child.pid)) {
+      return this.exitObservation?.kind === "failure"
+        ? { kind: "prerequisite-or-process-failure" }
+        : { kind: "process-still-active" };
     }
     while (true) {
       const observed = await this.waitForExitOrGrace(exit);
       if (observed !== undefined) {
-        if (observed.kind === "failure") return await this.resultForFailedObservation();
-        return this.resultFor(observed);
+        if (observed.kind === "exit") return this.resultFor(observed);
+        return await this.finishFailedObservation();
       }
       if (this.signalsSent >= 3) return { kind: "process-still-active" };
       this.sendNextSignal();
@@ -163,38 +173,28 @@ class OwnedRecorderRun implements RecorderRun {
     const signal = ["SIGINT", "SIGTERM", "SIGKILL"] as const;
     const next = signal[this.signalsSent++];
     if (next === undefined) return;
-    try { this.child.kill(next); } catch { /* Continue bounded shutdown after a failed signal delivery. */ }
+    try { this.child.kill(next); } catch { /* Bounded containment still advances after failed delivery. */ }
   }
 
-  private resultFor(observation: Extract<ExitObservation, { readonly kind: "exit" }>): RecorderResult {
-    if (this.stopReason === "unpersisted") return { kind: "unpersisted-process" };
-    if (this.stopReason === "operator" && this.stopPrecedesExit) return { kind: "operator-cancelled" };
+  private resultFor(observation: ExitObservation): RecorderResult {
+    if (observation.kind === "failure") {
+      if (!isSafePid(this.child.pid)) return { kind: "prerequisite-or-process-failure" };
+      return { kind: "process-still-active" };
+    }
+    if (this.shutdownReason === "contain" && this.stopPrecedesExit) return { kind: "prerequisite-or-process-failure" };
+    if (this.shutdownReason === "operator" && this.stopPrecedesExit) return { kind: "operator-cancelled" };
     return observation.value.signal === null
       ? { kind: "exited", exitCode: observation.value.code ?? 1 }
       : { kind: "signalled" };
   }
 
-  private async resultForFailedObservation(): Promise<RecorderResult> {
-    if (this.stopReason === "unpersisted") return await this.finishUnpersistedShutdown();
-    if (this.stopReason === "operator") return await this.finishOperatorShutdown();
-    return { kind: "process-still-active" };
-  }
-
-  private async finishUnpersistedShutdown(): Promise<RecorderResult> {
+  private async finishFailedObservation(): Promise<RecorderResult> {
+    if (!isSafePid(this.child.pid)) return { kind: "prerequisite-or-process-failure" };
     while (this.signalsSent < 3) {
       await this.waitForGrace();
       this.sendNextSignal();
     }
-    await this.waitForGrace();
-    return { kind: "unpersisted-process" };
-  }
-
-  private async finishOperatorShutdown(): Promise<RecorderResult> {
-    while (this.signalsSent < 3) {
-      await this.waitForGrace();
-      this.sendNextSignal();
-    }
-    await this.waitForGrace();
+    // The observer already failed: a post-SIGKILL wait cannot prove exit.
     return { kind: "process-still-active" };
   }
 
@@ -221,20 +221,22 @@ class OwnedRecorderRun implements RecorderRun {
 export class PlaywrightRecorder implements Recorder {
   private readonly resolveCli: () => Promise<string>;
   private readonly spawn: RecorderSpawn;
-  private readonly probeProcess: (pid: number) => boolean;
+  private readonly identity: ProcessIdentity;
+  private readonly ownershipToken: () => string;
   private readonly cancellationGraceMs: number;
   private readonly delay: (milliseconds: number) => RecorderDelay;
 
   constructor(private readonly options: PlaywrightRecorderOptions) {
     this.resolveCli = options.resolveCli ?? declaredPlaywrightCli;
     this.spawn = options.spawn ?? nodeSpawn;
-    this.probeProcess = options.probeProcess ?? processAppearsActive;
+    this.identity = options.identity ?? new ProcessIdentityAdapter();
+    this.ownershipToken = options.ownershipToken ?? (() => randomBytes(32).toString("hex"));
     this.cancellationGraceMs = options.cancellationGraceMs ?? 1_000;
     this.delay = options.delay ?? nodeDelay;
   }
 
-  async isProcessActive(evidence: { readonly pid: number }): Promise<boolean> {
-    return this.probeProcess(evidence.pid);
+  async probeProcess(evidence: RecorderProcessEvidence): Promise<ProcessProbe> {
+    return await this.identity.probe(evidence);
   }
 
   async start(command: RecordCaptureCommand): Promise<RecorderRun> {
@@ -243,7 +245,7 @@ export class PlaywrightRecorder implements Recorder {
     let run: OwnedRecorderRun | undefined;
     const removeAbort = command.signal.onAbort(() => {
       cancellationRequested = true;
-      run?.stop();
+      run?.cancelByOperator();
     });
     try {
       if (cancellationRequested || command.signal.aborted) {
@@ -255,18 +257,32 @@ export class PlaywrightRecorder implements Recorder {
         removeAbort();
         return new FinalizedRecorderRun({ kind: "operator-cancelled" });
       }
+      const ownershipToken = this.ownershipToken();
+      if (!/^[a-f0-9]{64}$/.test(ownershipToken)) {
+        removeAbort();
+        return new FinalizedRecorderRun({ kind: "prerequisite-or-process-failure" });
+      }
       const child = this.spawn(process.execPath, [
         cli, "codegen", "--browser", "chromium", "--output", this.stagedRecording(command.captureId), command.url,
       ], {
         shell: false,
         stdio: command.terminalMode === "human" ? "inherit" : ["inherit", "ignore", "inherit"],
+        env: { ...process.env, [RECORDER_OWNERSHIP_MARKER]: ownershipToken },
       });
       run = new OwnedRecorderRun(child, this.delay, this.cancellationGraceMs);
-      void run.waitForCompletion().then(removeAbort);
-      if (cancellationRequested) run.stop();
-      if (run.evidence === undefined) run.stopForUnpersistedEvidence();
+      void run.waitForCompletion().finally(removeAbort);
+      if (isSafePid(child.pid)) {
+        const observed = await this.identity.observe(child.pid);
+        if (observed.kind === "present") run.setEvidence({ pid: child.pid, identity: observed.identity });
+        else if (observed.kind === "unknown") run.contain();
+      }
+      if (cancellationRequested) run.cancelByOperator();
       return run;
     } catch {
+      if (run !== undefined) {
+        run.contain();
+        return run;
+      }
       removeAbort();
       return new FinalizedRecorderRun({ kind: "prerequisite-or-process-failure" });
     }

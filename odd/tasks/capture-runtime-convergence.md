@@ -132,6 +132,47 @@ CRT-4 final evidence:
 - Residual fail-closed limits: spawn-to-PID-persistence crash cannot prove safe replay; live/reused PID remains non-actionable; persistence operations are not cancellable but cannot regress terminal state.
 - Cleanup issue #72 scope was not implemented.
 
+## PR #73 Review Rework
+
+Human review invalidated delivery readiness after the first native receipt. PR #73 remains open and blocked; its approved receipt does not apply to the replacement candidate. The seven blockers form two root classes: an ambiguous capture launch/ownership lifecycle and a non-reentrant project lock.
+
+### Replacement model
+
+- Replace ambiguous `running` with persisted `pending`, `launching`, and `recording` facts. `pending` proves no launch claim; `launching` means launch was claimed but durable child identity is not established; `recording` requires durable process identity.
+- Keep one process-state authority in `session.json`; do not add lifecycle booleans or timing flags.
+- Definite spawn/prerequisite failure terminalizes `launching` as `failed`. Unknown launch outcome remains explicit and blocks new capture without hanging or killing a process.
+- Persist adapter-neutral process evidence containing PID plus opaque boot/start identity. Linux uses boot ID and process start ticks; macOS uses boot identity and process start time. Probe results are `same`, `absent`, `reused`, or `unknown`; only `absent`/`reused` may auto-converge, and recovery never signals a persisted PID.
+- Recover every nonterminal project session before beginning any request. Safe recovery rejects stale `post_exit`, completes `resolving`, fails never-launched `pending`, converges absent/reused `recording`, and blocks `launching`, live-owned, or unknown ownership.
+- Replace public `recordResolution()` plus `finishResolution()` orchestration with one normalized idempotent `resolve()` operation. The same decision converges from resolving/terminal state; a different decision returns an explicit conflict.
+- The recorder owns the sole abort subscription. Operator abort and internal containment are distinct controls and outcomes. No application branch returns a never-settling promise.
+- `ProjectLock.acquire()` returns an immutable per-acquisition lease whose `release()` closes only its own nonce.
+- The current capture contract is not exposed by a product CLI yet. The store will read legacy `pharos.capture-session/1` safely and migrate or block it without inferring ownership from a legacy PID; new state writes use the replacement contract.
+
+### Rework tasks
+
+- [x] **CRR-1 — Make project locking reentrant-safe.** Return nonce-bound leases from `ProjectLock.acquire()`, migrate store call sites, and reproduce the post-unlink overlap that currently leaks the second lock.
+  - RED: a gated release of lease A could not call `value.release()` before production changes.
+  - Outcome: every acquisition returns a nonce-bound lease; overlap and concurrent/repeated release cannot consume or unlink another holder, and failed release does not falsely consume its lease.
+  - Checks: lock suite 12/12; filesystem store suites 220/220; lint, typecheck, and diff-check passed.
+- [x] **CRR-2 — Replace the ambiguous capture lifecycle and resolution API.** Introduce the replacement persisted state union, safe legacy read behavior, normalized resolution conflicts, and one idempotent `resolve()` store operation.
+  - RED: v2 lifecycle and atomic resolution tests failed against the prior store; initial test migration also exposed unacceptable deleted coverage and was rejected.
+  - Outcome: session/2 persists `pending`/`launching`/`recording`, safely maps legacy running to blocked launching, and converges identical normalized decisions through atomic `resolve()` while conflicts refuse.
+  - Checks: restored and migrated coverage now has 21 application and 39 store tests; focused domain/store/application suite passed 128/128; lint, typecheck, and diff-check passed.
+- [x] **CRR-3 — Add strong recorder identity and correct containment.** Probe supported Linux/macOS process identity, classify same/absent/reused/unknown, make async spawn-without-PID a prerequisite failure, keep one abort subscriber, and separate internal containment from operator cancellation.
+  - RED: async no-PID spawn, fingerprint validation, one-owner abort, Linux/macOS probe classification, and containment ordering failed before production changes.
+  - Outcome: recorder evidence is PID plus an opaque SHA-256 identity: Linux hashes boot ID/start ticks, while macOS hashes a per-launch 256-bit ownership marker injected into the child environment and recovered through `ps eww`. Probes classify same/absent/reused/unknown without signalling, the recorder solely owns abort, and internal containment cannot become operator cancellation or overwrite an earlier exit.
+  - Checks: recorder suite 21 cases and final focused lifecycle suite 168/168; lint, typecheck, and diff-check passed with hermetic injected OS/process probes.
+- [x] **CRR-4 — Recover project-wide and simplify orchestration.** Sweep every nonterminal session before begin, block unsafe ownership, converge safe orphans, call atomic `resolve()`, and delete persistence races and never-settling promises.
+  - RED: seven application cases failed before project-wide blocker convergence and unclaimed routing; direct concurrent launch proved two different requests could both claim before project-exclusive launch was added.
+  - Outcome: `recoverProject()` deterministically converges safe project sessions and reports unsafe blockers; `beginLaunch()` is the only launch API and grants one project-wide spawn authority under one lease; detached evidence persistence is consumed and contained while recorder completion remains the sole awaited lifecycle.
+  - Checks: independent verifier passed all seven CRR-4 invariants; recorder/store/application/integration suite 166/166 (19/104/41/2); lint, typecheck, and diff-check passed.
+- [ ] **CRR-5 — Verify and replace delivery evidence.** Run focused suites, full hermetic tests, lint, typecheck, build, and diff-check; independently validate all seven blockers and three minor findings; start a new native review for the new candidate before pushing PR #73.
+  - Checks: every failed, skipped, or pending command disclosed; no merge.
+
+### Review workload and delivery
+
+The maintainer already accepted a single-PR size exception for PR #73. Keep reviewable commits by root/work unit even though the PR remains atomic. Forecast: roughly 1,250 changed lines, mostly replacement of flawed orchestration and tests rather than additive timing machinery.
+
 ## Next Step
 
-Continue native lineage `review-f04019940bb352b9` with the verified bounded correction. Commit, push, PR, and merge remain separately authorized delivery actions.
+Implement CRR-5 without pushing or claiming replacement review approval until the full candidate passes independent and native review.

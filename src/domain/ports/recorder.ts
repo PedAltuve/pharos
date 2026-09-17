@@ -21,19 +21,19 @@ export type RecorderResult =
   | { readonly kind: "signalled" }
   /** The owned child may be live, so its running session must not be terminalized. */
   | { readonly kind: "process-still-active" }
-  | { readonly kind: "unpersisted-process" }
   | { readonly kind: "prerequisite-or-process-failure" };
+export type ProcessProbe = "same" | "absent" | "reused" | "unknown";
 
-/** A started recorder owns exactly one exit observer and offers bounded shutdown. */
+/** A started recorder owns exactly one exit observer and exposes internal containment. */
 export interface RecorderRun {
   readonly evidence: RecorderProcessEvidence | undefined;
   waitForCompletion(): Promise<RecorderResult>;
-  stop(): void;
+  contain(): void;
 }
 
 /** Process/browser adapter boundary. No implementation detail enters the domain. */
 export interface Recorder {
   start(command: RecordCaptureCommand): Promise<RecorderRun>;
-  /** A live or reused PID is conservatively active; only absence is actionable during recovery. */
-  isProcessActive(evidence: RecorderProcessEvidence): Promise<boolean>;
+  /** Recovery never signals the observed process; identity reuse is distinct from absence. */
+  probeProcess(evidence: RecorderProcessEvidence): Promise<ProcessProbe>;
 }

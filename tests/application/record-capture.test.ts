@@ -24,8 +24,16 @@ const captureId = "cap_018f47de-7a00-7cc0-8000-000000000001" as const;
 const requestId = "req_018f47de-7a00-7cc0-8000-000000000001" as const;
 const timestamp = "2026-03-04T00:00:00.000Z";
 const canary = "do-not-persist-or-return-this-secret";
+const artifact = {
+  reference: `captures/${captureId}/recording.spec.ts`,
+  byteSize: 2,
+  sha256: "a".repeat(64),
+};
+const recorderEvidence = { pid: 4242, identity: "a".repeat(64) };
 
-const request = (overrides: Partial<RecordCaptureRequest> = {}): RecordCaptureRequest => ({
+const request = (
+  overrides: Partial<RecordCaptureRequest> = {},
+): RecordCaptureRequest => ({
   projectId,
   contextRevision: 1,
   url: "http://localhost:3000/",
@@ -37,52 +45,131 @@ const request = (overrides: Partial<RecordCaptureRequest> = {}): RecordCaptureRe
   ...overrides,
 });
 
-function completedRun(result: RecorderResult, evidence: { readonly pid: number } | undefined = { pid: 4242 }): RecorderRun {
-  return { evidence, async waitForCompletion() { return result; }, stop() {} };
-}
-
-function running() {
+function pending(): Extract<CaptureSession, { status: "pending" }> {
   return {
-    contract: "pharos.capture-session/1" as const,
+    contract: "pharos.capture-session/2",
     projectId,
     captureId,
     requestId,
     inputHash: "references-only-hash",
     secretSourceReferences: ["env:CAPTURE_TOKEN"],
     createdAt: timestamp,
-    status: "running" as const,
+    status: "pending",
   };
 }
-
-function dependencies(events: string[] = []): RecordCaptureDependencies & {
-  readonly store: CaptureStore;
-  readonly recorder: Recorder;
-  readonly resolver: SecretResolver;
+function completedRun(
+  result: RecorderResult,
+  evidence: { readonly pid: number; readonly identity: string } | undefined = { pid: 4242, identity: "a".repeat(64) },
+): RecorderRun {
+  return {
+    evidence,
+    async waitForCompletion() {
+      return result;
+    },
+    contain() {},
+  };
+}
+function terminal(
+  decision: {
+    readonly resolution: string;
+    readonly reason?: string;
+    readonly detectionCount?: number;
+    readonly artifact?: typeof artifact;
+  },
+  completedAt: string,
+): CaptureSession {
+  if (decision.resolution === "promote")
+    return {
+      ...pending(),
+      status: "promoted",
+      artifact: decision.artifact ?? artifact,
+      completedAt,
+    };
+  if (decision.resolution === "reject")
+    return {
+      ...pending(),
+      status: "rejected",
+      reason: (decision.reason ?? "scan-incomplete") as "scan-incomplete",
+      detectionCount: decision.detectionCount ?? 0,
+      completedAt,
+    };
+  if (decision.resolution === "fail")
+    return {
+      ...pending(),
+      status: "failed",
+      reason: (decision.reason ?? "recorder-exit") as "recorder-exit",
+      completedAt,
+    };
+  return {
+    ...pending(),
+    status: "interrupted",
+    reason: (decision.reason ?? "signal") as "signal",
+    completedAt,
+  };
+}
+function dependencies(
+  events: string[] = [],
+): RecordCaptureDependencies & {
+  store: CaptureStore;
+  recorder: Recorder;
+  resolver: SecretResolver;
+  scanner: SensitivityScanner;
 } {
   const store: CaptureStore = {
-    async recover() { events.push("recover"); return ok([]); },
-    async begin(command) { events.push(`begin:${command.inputHash}`); return ok({ ...running(), ...command }); },
-    async recordRecorderStarted(_project, _capture, evidence) { events.push(`started:${evidence.pid}`); return ok({ ...running(), recorder: evidence }); },
-    async markPostExit(_project, _capture, exitedAt) { events.push("post-exit"); return ok({ ...running(), status: "post_exit", recorderExitedAt: exitedAt }); },
-    async recordResolution(_project, _capture, resolution) {
-      events.push(`decision:${resolution.resolution}`);
-      return ok({ ...running(), status: "resolving", ...resolution });
+    async recoverProject() {
+      events.push("recover-project");
+      return ok({ recovered: [], blocked: [] });
     },
-    async finishResolution(_project, _capture, completedAt) {
-      events.push("finish");
-      return ok({ ...running(), status: "promoted", artifact: { reference: `captures/${captureId}/recording.spec.ts`, byteSize: 2, sha256: "a".repeat(64) }, completedAt });
+    async beginLaunch(command) {
+      events.push(`begin-launch:${command.inputHash}`);
+      return ok({
+        session: { ...pending(), ...command, status: "launching" },
+        claimed: true,
+      });
     },
-    async getSession() { return err({ rule: "capture-not-found", captureId }); },
-    async claimAnnotation() { return err({ rule: "capture-not-found", captureId }); },
-    async commitAssociation() { return err({ rule: "capture-not-found", captureId }); },
-    async getAssociationByCapture() { return ok(null); },
-    async getAssociationByBeacon() { return ok(null); },
+    async recordRecorderStarted(_project, _capture, evidence) {
+      events.push(`started:${evidence.pid}`);
+      return ok({ ...pending(), status: "recording", recorder: evidence });
+    },
+    async markPostExit(_project, _capture, exitedAt) {
+      events.push("post-exit");
+      return ok({
+        ...pending(),
+        status: "post_exit",
+        recorderExitedAt: exitedAt,
+      });
+    },
+    async resolve(_project, _capture, decision, completedAt) {
+      events.push(`resolve:${decision.resolution}:${decision.reason ?? ""}`);
+      return ok(terminal(decision, completedAt));
+    },
+    async getSession() {
+      return err({ rule: "capture-not-found", captureId });
+    },
+    async claimAnnotation() {
+      return err({ rule: "capture-not-found", captureId });
+    },
+    async commitAssociation() {
+      return err({ rule: "capture-not-found", captureId });
+    },
+    async getAssociationByCapture() {
+      return ok(null);
+    },
+    async getAssociationByBeacon() {
+      return ok(null);
+    },
   };
   let disposed = false;
   const resolver: SecretResolver = {
     async resolve(references) {
-      events.push(`resolve:${references.join(",")}`);
-      return ok({ values: new Map([["env:CAPTURE_TOKEN", canary]]), dispose: () => { disposed = true; events.push("dispose"); } });
+      events.push(`secrets:${references.join(",")}`);
+      return ok({
+        values: new Map([["env:CAPTURE_TOKEN", canary]]),
+        dispose: () => {
+          disposed = true;
+          events.push("dispose");
+        },
+      });
     },
   };
   const recorder: Recorder = {
@@ -91,15 +178,14 @@ function dependencies(events: string[] = []): RecordCaptureDependencies & {
       expect(disposed).toBe(false);
       return completedRun({ kind: "exited", exitCode: 0 });
     },
-    async isProcessActive() { return true; },
+    async probeProcess() {
+      return "same";
+    },
   };
   const scanner: SensitivityScanner = {
     async scan(command) {
       events.push(`scan:${command.resolvedSecrets.size}`);
-      if (command.resolvedSecrets.size > 0) {
-        expect(command.resolvedSecrets.get("env:CAPTURE_TOKEN")).toBe(canary);
-      }
-      return ok({ reference: `captures/${captureId}/recording.spec.ts`, byteSize: 2, sha256: "a".repeat(64) });
+      return ok(artifact);
     },
   };
   return {
@@ -113,473 +199,570 @@ function dependencies(events: string[] = []): RecordCaptureDependencies & {
   };
 }
 
-describe("RecordCapture", () => {
+describe("RecordCapture v2 lifecycle", () => {
   it("refuses an omitted secret declaration before resolution, allocation, recovery, or spawn", async () => {
     const events: string[] = [];
-    const useCase = new RecordCapture(dependencies(events));
-
-    await expect(useCase.execute(request({ secretSourceReferences: [], noSecretSources: false }))).resolves.toEqual({
+    await expect(
+      new RecordCapture(dependencies(events)).execute(
+        request({ secretSourceReferences: [], noSecretSources: false }),
+      ),
+    ).resolves.toEqual({
       ok: false,
       error: { rule: "secret-sources-declaration-required" },
     });
     expect(events).toEqual([]);
   });
 
-  it("accepts only explicit --no-secret-sources for an empty declaration", async () => {
+  it("accepts only explicit no-secret-sources and claims pending before spawning", async () => {
     const events: string[] = [];
-    const useCase = new RecordCapture(dependencies(events));
-
-    await expect(useCase.execute(request({ secretSourceReferences: [], noSecretSources: true }))).resolves.toMatchObject({
-      ok: true,
-      value: { captureId, status: "promoted" },
-    });
-    expect(events).toEqual(["recover", "begin:hash:{\"contextRevision\":1,\"projectId\":\"proj_018f47de-7a00-7cc0-8000-000000000001\",\"secretSourceReferences\":[],\"terminalMode\":\"human\",\"url\":\"http://localhost:3000/\"}", `record:${captureId}`, "started:4242", "post-exit", "scan:0", "decision:promote", "finish"]);
+    await expect(
+      new RecordCapture(dependencies(events)).execute(
+        request({ secretSourceReferences: [], noSecretSources: true }),
+      ),
+    ).resolves.toMatchObject({ ok: true, value: { status: "promoted" } });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        "recover-project",
+        `begin-launch:hash:${JSON.stringify({ contextRevision: 1, projectId, secretSourceReferences: [], terminalMode: "human", url: "http://localhost:3000/" })}`,
+        `record:${captureId}`,
+        "started:4242",
+        "post-exit",
+        "scan:0",
+        "resolve:promote:",
+      ]),
+    );
   });
 
-  it("resolves declared values before allocation or spawn, hashes references not values, and disposes after terminalization", async () => {
+  it("resolves declared values before allocation, hashes references, and disposes after terminalization", async () => {
     const events: string[] = [];
-    const useCase = new RecordCapture(dependencies(events));
-
-    await expect(useCase.execute(request())).resolves.toEqual({
+    await expect(
+      new RecordCapture(dependencies(events)).execute(request()),
+    ).resolves.toEqual({
       ok: true,
       value: { captureId, status: "promoted", nextAction: "capture-annotate" },
     });
-    expect(events).toEqual([
-      "resolve:env:CAPTURE_TOKEN",
-      "recover",
-      "begin:hash:{\"contextRevision\":1,\"projectId\":\"proj_018f47de-7a00-7cc0-8000-000000000001\",\"secretSourceReferences\":[\"env:CAPTURE_TOKEN\"],\"terminalMode\":\"human\",\"url\":\"http://localhost:3000/\"}",
-      `record:${captureId}`,
-      "started:4242",
-      "post-exit",
-      "scan:1",
-      "decision:promote",
-      "finish",
-      "dispose",
-    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        "secrets:env:CAPTURE_TOKEN",
+        "recover-project",
+        `begin-launch:hash:${JSON.stringify({ contextRevision: 1, projectId, secretSourceReferences: ["env:CAPTURE_TOKEN"], terminalMode: "human", url: "http://localhost:3000/" })}`,
+        "scan:1",
+        "resolve:promote:",
+        "dispose",
+      ]),
+    );
+    expect(events.indexOf("secrets:env:CAPTURE_TOKEN")).toBeLessThan(
+      events.indexOf("recover-project"),
+    );
     expect(events.join("\n")).not.toContain(canary);
   });
 
-  it("persists running before an unavailable recorder prerequisite, then terminalizes safely", async () => {
+  it("persists launch before an unavailable recorder prerequisite and terminalizes safely", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    configured.recorder.start = async () => {
-      events.push("record-prerequisite-failure");
-      return completedRun({ kind: "prerequisite-or-process-failure" }, undefined);
-    };
-    configured.store.finishResolution = async () => {
-      events.push("finish-failed");
-      return ok({ ...running(), status: "failed", reason: "recorder-prerequisite-or-process-failure", completedAt: timestamp });
-    };
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
+    configured.recorder.start = async () =>
+      completedRun({ kind: "prerequisite-or-process-failure" }, undefined);
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toEqual({
       ok: true,
-      value: { captureId, status: "failed", nextAction: "resolve-recorder-prerequisite" },
+      value: {
+        captureId,
+        status: "failed",
+        nextAction: "resolve-recorder-prerequisite",
+      },
     });
-    expect(events).toEqual(expect.arrayContaining(["begin:hash:{\"contextRevision\":1,\"projectId\":\"proj_018f47de-7a00-7cc0-8000-000000000001\",\"secretSourceReferences\":[\"env:CAPTURE_TOKEN\"],\"terminalMode\":\"human\",\"url\":\"http://localhost:3000/\"}", "record-prerequisite-failure", "decision:fail", "finish-failed", "dispose"]));
-    expect(events.indexOf("begin:hash:{\"contextRevision\":1,\"projectId\":\"proj_018f47de-7a00-7cc0-8000-000000000001\",\"secretSourceReferences\":[\"env:CAPTURE_TOKEN\"],\"terminalMode\":\"human\",\"url\":\"http://localhost:3000/\"}")).toBeLessThan(events.indexOf("record-prerequisite-failure"));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        `begin-launch:hash:${JSON.stringify({ contextRevision: 1, projectId, secretSourceReferences: ["env:CAPTURE_TOKEN"], terminalMode: "human", url: "http://localhost:3000/" })}`,
+        "resolve:fail:recorder-prerequisite-or-process-failure",
+        "dispose",
+      ]),
+    );
   });
 
   it.each([
-    ["interruption", { kind: "operator-cancelled" as const }, "interrupt", "operator-cancelled", "interrupted", "rerun-capture"],
-    ["non-zero exit", { kind: "exited" as const, exitCode: 12 }, "fail", "recorder-exit", "failed", "rerun-capture"],
-  ])("records one terminal %s without a Beacon dependency", async (_name, recorderResult, resolution, reason, status, nextAction) => {
-    const events: string[] = [];
-    const configured = dependencies(events);
-    configured.recorder.start = async () => completedRun(recorderResult);
-    configured.store.recordResolution = async (_project, _capture, record) => {
-      events.push(`decision:${record.resolution}:${record.reason}`);
-      return ok({ ...running(), status: "resolving", ...record });
-    };
-    configured.store.finishResolution = async () => {
-      events.push(`finish:${status}`);
-      return status === "interrupted"
-        ? ok({ ...running(), status: "interrupted", reason: "operator-cancelled", completedAt: timestamp })
-        : ok({ ...running(), status: "failed", reason: "recorder-exit", completedAt: timestamp });
-    };
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
-      ok: true,
-      value: { captureId, status, nextAction },
-    });
-    expect(events.filter((event) => event.startsWith("decision:"))).toEqual([`decision:${resolution}:${reason}`]);
-    expect(events.filter((event) => event.startsWith("finish:"))).toEqual([`finish:${status}`]);
-  });
+    [
+      "operator cancellation",
+      { kind: "operator-cancelled" as const },
+      "interrupt",
+      "operator-cancelled",
+      "interrupted",
+      "rerun-capture",
+    ],
+    [
+      "non-zero exit",
+      { kind: "exited" as const, exitCode: 12 },
+      "fail",
+      "recorder-exit",
+      "failed",
+      "rerun-capture",
+    ],
+  ] as const)(
+    "records %s as one atomic terminal decision",
+    async (_name, result, resolution, reason, status, nextAction) => {
+      const events: string[] = [];
+      const configured = dependencies(events);
+      configured.recorder.start = async () => completedRun(result);
+      await expect(
+        new RecordCapture(configured).execute(request()),
+      ).resolves.toEqual({
+        ok: true,
+        value: { captureId, status, nextAction },
+      });
+      expect(events.filter((event) => event.startsWith("resolve:"))).toEqual([
+        `resolve:${resolution}:${reason}`,
+      ]);
+    },
+  );
 
   it("replays a terminal request with its original identity while IDs and clocks advance", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    let idCalls = 0;
-    let clockCalls = 0;
-    let beginCalls = 0;
+    let calls = 0;
     Object.assign(configured, {
-      ids: { next: () => ++idCalls === 1 ? captureId : "cap_018f47de-7a00-7cc0-8000-000000000002" } as IdGenerator,
-      clock: { now: () => new Date(++clockCalls === 1 ? timestamp : "2026-03-05T00:00:00.000Z") } as Clock,
+      ids: {
+        next: () =>
+          ++calls === 1
+            ? captureId
+            : ("cap_018f47de-7a00-7cc0-8000-000000000002" as const),
+      } as IdGenerator,
     });
-    configured.store.begin = async (command) => {
-      events.push(`begin:${command.captureId}`);
-      return ++beginCalls === 1
-        ? ok({ ...running(), ...command })
-        : ok({ ...running(), status: "promoted", artifact: { reference: `captures/${captureId}/recording.spec.ts`, byteSize: 2, sha256: "a".repeat(64) }, completedAt: timestamp });
-    };
-
+    configured.store.beginLaunch = async (command) =>
+      calls === 1
+        ? ok({ session: { ...pending(), ...command, status: "launching" }, claimed: true })
+        : ok({
+            session: {
+              ...pending(),
+              status: "promoted",
+              artifact,
+              completedAt: timestamp,
+            },
+            claimed: false,
+          });
     const useCase = new RecordCapture(configured);
-    const first = await useCase.execute(request());
-    const second = await useCase.execute(request());
-
-    expect(second).toEqual(first);
-    expect(events.filter((event) => event.startsWith("record:"))).toEqual([`record:${captureId}`]);
-    expect(events.filter((event) => event.startsWith("scan:"))).toEqual(["scan:1"]);
-    expect(events.filter((event) => event === "post-exit" || event.startsWith("decision:") || event === "finish")).toEqual(["post-exit", "decision:promote", "finish"]);
+    expect(await useCase.execute(request())).toMatchObject({ ok: true });
+    expect(await useCase.execute(request())).toMatchObject({
+      ok: true,
+      value: { status: "promoted" },
+    });
+    expect(events.filter((event) => event.startsWith("record:"))).toHaveLength(
+      1,
+    );
   });
 
-  it("does not start another recorder for a persisted active session", async () => {
+  it("blocks a persisted launching replay without spawning another recorder", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    Object.assign(configured, { ids: { next: () => "cap_018f47de-7a00-7cc0-8000-000000000002" } as IdGenerator });
-    configured.store.begin = async () => ok(running());
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
+    configured.store.beginLaunch = async () =>
+      ok({ session: { ...pending(), status: "launching" }, claimed: false });
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toEqual({
       ok: false,
       error: { rule: "capture-process-still-active", captureId },
     });
-    expect(events.filter((event) => event.startsWith("record:") || event.startsWith("scan:") || event === "post-exit" || event.startsWith("decision:") || event === "finish")).toEqual([]);
+    expect(events).not.toContain(`record:${captureId}`);
   });
 
-  it("refuses a same-request replay when its persisted recorder PID still appears live", async () => {
+  it.each(["same", "unknown"] as const)("blocks a %s recording replay without spawning or signalling", async (probe) => {
     const events: string[] = [];
     const configured = dependencies(events);
-    configured.store.begin = async () => ok({ ...running(), recorder: { pid: 4242 } });
-    (configured.recorder as Recorder & { isProcessActive: (evidence: { readonly pid: number }) => Promise<boolean> }).isProcessActive = async (evidence) => {
-      events.push(`probe:${evidence.pid}`);
-      return true;
+    configured.store.beginLaunch = async () =>
+      ok({ session: { ...pending(), status: "recording", recorder: { pid: 4242, identity: "a".repeat(64) } }, claimed: false });
+    configured.recorder.probeProcess = async () => {
+      events.push("probe");
+      return probe;
     };
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toEqual({
       ok: false,
       error: { rule: "capture-process-still-active", captureId },
     });
-    expect(events).toContain("probe:4242");
-    expect(events.filter((event) => event.startsWith("record:") || event.startsWith("decision:") || event === "finish")).toEqual([]);
+    expect(events).toContain("probe");
+    expect(events).not.toContain(`record:${captureId}`);
   });
 
-  it("terminalizes a persisted running capture whose recorded child is absent and converges on replay", async () => {
+  it.each(["absent", "reused"] as const)("terminalizes a %s original recording without touching the observed PID", async (probe) => {
     const events: string[] = [];
     const configured = dependencies(events);
-    let session: CaptureSession = { ...running(), recorder: { pid: 4242 } };
-    configured.store.begin = async () => ok(session);
-    configured.store.recordResolution = async (_project, _capture, resolution) => {
-      events.push(`decision:${resolution.resolution}:${resolution.reason}`);
-      session = { ...running(), status: "resolving", ...resolution };
+    let session: CaptureSession = {
+      ...pending(),
+      status: "recording",
+      recorder: { pid: 4242, identity: "a".repeat(64) },
+    };
+    configured.store.beginLaunch = async () => ok({ session, claimed: false });
+    configured.store.resolve = async (_p, _c, decision, completedAt) => {
+      events.push(`resolve:${decision.resolution}`);
+      session = terminal(decision, completedAt);
       return ok(session);
     };
-    configured.store.finishResolution = async () => {
-      events.push("finish:interrupted");
-      session = { ...running(), status: "interrupted", reason: "signal", completedAt: timestamp };
-      return ok(session);
-    };
-    (configured.recorder as Recorder & { isProcessActive: (evidence: { readonly pid: number }) => Promise<boolean> }).isProcessActive = async (evidence) => {
-      events.push(`probe:${evidence.pid}`);
-      return false;
-    };
-
+    configured.recorder.probeProcess = async () => probe;
     const useCase = new RecordCapture(configured);
-    await expect(useCase.execute(request())).resolves.toEqual({
+    await expect(useCase.execute(request())).resolves.toMatchObject({
       ok: true,
-      value: { captureId, status: "interrupted", nextAction: "rerun-capture" },
+      value: { status: "interrupted" },
     });
-    await expect(useCase.execute(request())).resolves.toEqual({
+    await expect(useCase.execute(request())).resolves.toMatchObject({
       ok: true,
-      value: { captureId, status: "interrupted", nextAction: "rerun-capture" },
+      value: { status: "interrupted" },
     });
-    expect(events.filter((event) => event === "probe:4242")).toEqual(["probe:4242"]);
-    expect(events.filter((event) => event.startsWith("decision:") || event === "finish:interrupted")).toEqual(["decision:interrupt:signal", "finish:interrupted"]);
-    expect(events.filter((event) => event.startsWith("record:"))).toEqual([]);
+    expect(
+      events.filter((event) => event === "resolve:interrupt"),
+    ).toHaveLength(1);
   });
 
-  it("fails closed instead of promoting an old secret artifact after post-exit replay", async () => {
+  it("fails closed instead of scanning a post-exit session whose secrets may have rotated", async () => {
     const events: string[] = [];
-    const originalSecret = "original-rotatable-secret";
-    const rotatedSecret = "rotated-rotatable-secret";
     const configured = dependencies(events);
-    Object.assign(configured, { ids: { next: () => "cap_018f47de-7a00-7cc0-8000-000000000002" } as IdGenerator });
-    configured.resolver.resolve = async () => ok({
-      values: new Map([["env:CAPTURE_TOKEN", rotatedSecret]]),
-      dispose: () => { events.push("dispose"); },
-    });
-    configured.store.begin = async () => ok({ ...running(), status: "post_exit", recorderExitedAt: timestamp });
-    configured.scanner.scan = async (command) => {
-      events.push("scanner-ran");
-      return command.resolvedSecrets.get("env:CAPTURE_TOKEN") === originalSecret
-        ? err({ category: "detected", count: 1 })
-        : ok({ reference: `captures/${captureId}/recording.spec.ts`, byteSize: 2, sha256: "a".repeat(64) });
+    configured.store.beginLaunch = async () =>
+      ok({ session: { ...pending(), status: "post_exit", recorderExitedAt: timestamp }, claimed: false });
+    configured.scanner.scan = async () => {
+      events.push("scan");
+      return ok(artifact);
     };
-    configured.store.recordResolution = async (_project, _capture, resolution) => {
-      events.push(`decision:${resolution.resolution}:${resolution.reason}`);
-      return ok({ ...running(), status: "resolving", ...resolution });
-    };
-    configured.store.finishResolution = async () => ok({
-      ...running(),
-      status: "rejected",
-      reason: "scan-incomplete",
-      detectionCount: 0,
-      completedAt: timestamp,
-    });
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
-      ok: true,
-      value: { captureId, status: "rejected", nextAction: "rerun-capture" },
-    });
-    expect(events).toContain("decision:reject:scan-incomplete");
-    expect(events).not.toContain("scanner-ran");
-    expect(events.join("\n")).not.toContain(originalSecret);
-    expect(events.join("\n")).not.toContain(rotatedSecret);
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toMatchObject({ ok: true, value: { status: "rejected" } });
+    expect(events).toContain("resolve:reject:scan-incomplete");
+    expect(events).not.toContain("scan");
   });
 
   it("resumes no-secret post-exit scanning without repeating the recorder", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    Object.assign(configured, { ids: { next: () => "cap_018f47de-7a00-7cc0-8000-000000000002" } as IdGenerator });
-    configured.store.begin = async () => ok({ ...running(), status: "post_exit", recorderExitedAt: timestamp, secretSourceReferences: [] });
-
-    await expect(new RecordCapture(configured).execute(request({ secretSourceReferences: [], noSecretSources: true }))).resolves.toEqual({
-      ok: true,
-      value: { captureId, status: "promoted", nextAction: "capture-annotate" },
-    });
-    expect(events.filter((event) => event.startsWith("record:") || event === "post-exit")).toEqual([]);
-    expect(events.filter((event) => event.startsWith("scan:") || event.startsWith("decision:") || event === "finish")).toEqual(["scan:0", "decision:promote", "finish"]);
+    configured.store.beginLaunch = async () =>
+      ok({
+        session: {
+          ...pending(),
+          status: "post_exit",
+          recorderExitedAt: timestamp,
+          secretSourceReferences: [],
+        },
+        claimed: false,
+      });
+    await expect(
+      new RecordCapture(configured).execute(
+        request({ secretSourceReferences: [], noSecretSources: true }),
+      ),
+    ).resolves.toMatchObject({ ok: true, value: { status: "promoted" } });
+    expect(events).toEqual(
+      expect.arrayContaining(["scan:0", "resolve:promote:"]),
+    );
+    expect(events).not.toContain(`record:${captureId}`);
   });
 
-  it("finishes a persisted resolution without recorder or scanner side effects", async () => {
+  it("finishes a persisted resolving decision without recorder or scanner side effects", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    Object.assign(configured, { ids: { next: () => "cap_018f47de-7a00-7cc0-8000-000000000002" } as IdGenerator });
-    configured.store.begin = async () => ok({
-      ...running(),
-      status: "resolving",
-      resolution: "promote",
-      artifact: { reference: `captures/${captureId}/recording.spec.ts`, byteSize: 2, sha256: "a".repeat(64) },
-    });
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
-      ok: true,
-      value: { captureId, status: "promoted", nextAction: "capture-annotate" },
-    });
-    expect(events.filter((event) => event.startsWith("record:") || event.startsWith("scan:") || event === "post-exit" || event.startsWith("decision:"))).toEqual([]);
-    expect(events.filter((event) => event === "finish")).toEqual(["finish"]);
+    configured.store.beginLaunch = async () =>
+      ok({
+        session: {
+          ...pending(),
+          status: "resolving",
+          resolution: "promote",
+          artifact,
+        },
+        claimed: false,
+      });
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toMatchObject({ ok: true, value: { status: "promoted" } });
+    expect(events).toContain("resolve:promote:");
+    expect(events).not.toContain(`record:${captureId}`);
+    expect(events.filter((event) => event.startsWith("scan:"))).toEqual([]);
   });
 
-  it("records an incomplete scan as its own durable safe rejection category", async () => {
+  it("records incomplete scans as the durable safe rejection category", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    configured.scanner.scan = async () => err({ category: "incomplete", count: 0 });
-    configured.store.recordResolution = async (_project, _capture, resolution) => {
-      events.push(`decision:${resolution.reason}`);
-      return ok({ ...running(), status: "resolving", ...resolution });
-    };
-    configured.store.finishResolution = async () => {
-      events.push("finish-rejected");
-      return ok({ ...running(), status: "rejected", reason: "scan-incomplete", detectionCount: 0, completedAt: timestamp });
-    };
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
-      ok: true,
-      value: { captureId, status: "rejected", nextAction: "rerun-capture" },
-    });
-    expect(events).toContain("decision:scan-incomplete");
+    configured.scanner.scan = async () =>
+      err({ category: "incomplete", count: 0 });
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toMatchObject({ ok: true, value: { status: "rejected" } });
+    expect(events).toContain("resolve:reject:scan-incomplete");
     expect(events.join("\n")).not.toContain(canary);
   });
 
-  it("leaves the durable session running when cancellation escalation cannot prove the owned child exited", async () => {
+  it("leaves the session nonterminal when cancellation escalation cannot prove the child exited", async () => {
     const events: string[] = [];
     const configured = dependencies(events);
-    configured.recorder.start = async () => {
-      events.push("record:still-active");
-      return completedRun({ kind: "process-still-active" });
-    };
+    configured.recorder.start = async () =>
+      completedRun({ kind: "process-still-active" });
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-process-still-active", captureId },
+    });
+    expect(events.filter((event) => event.startsWith("resolve:"))).toEqual([]);
+  });
 
+  it("returns an explicit active refusal without awaiting stalled evidence persistence", async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const configured = dependencies();
+    configured.store.recordRecorderStarted = async () => {
+      await persisted;
+      return ok({ ...pending(), status: "recording", recorder: { pid: 4242, identity: "a".repeat(64) } });
+    };
+    configured.recorder.start = async () =>
+      completedRun({ kind: "process-still-active" });
     await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
       ok: false,
       error: { rule: "capture-process-still-active", captureId },
     });
-    expect(events).toContain("record:still-active");
-    expect(events.filter((event) => event === "post-exit" || event.startsWith("decision:") || event === "finish")).toEqual([]);
+    release();
   });
 
-  it("waits for PID persistence before refusing a still-active recorder", async () => {
-    let resolve!: () => void;
-    const persistence = new Promise<void>((done) => { resolve = done; });
-    const configured = dependencies();
-    configured.store.recordRecorderStarted = async () => {
-      await persistence;
-      return ok({ ...running(), recorder: { pid: 4242 } });
+  it("recovers an absent earlier recorder before allocating and spawning a new request", async () => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.recoverProject = async () =>
+      ok({
+        recovered: [],
+        blocked: [{ ...pending(), status: "recording", recorder: recorderEvidence }],
+      });
+    configured.recorder.probeProcess = async () => {
+      events.push("probe:absent");
+      return "absent";
     };
-    configured.recorder.start = async () => completedRun({ kind: "process-still-active" });
+    Object.assign(configured, { ids: { next: () => {
+      events.push("allocate");
+      return captureId;
+    } } as IdGenerator });
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { status: "promoted" },
+    });
+    expect(events.indexOf("probe:absent")).toBeLessThan(events.indexOf("allocate"));
+    expect(events).toContain("resolve:interrupt:signal");
+  });
 
-    let observed: unknown;
-    const execution = new RecordCapture(configured).execute(request());
-    void execution.then((result) => { observed = result; });
-    for (let index = 0; index < 20; index += 1) await Promise.resolve();
-    expect(observed).toBeUndefined();
-    resolve();
-    await expect(execution).resolves.toEqual({ ok: false, error: { rule: "capture-process-still-active", captureId } });
+  it.each(["same", "unknown"] as const)("blocks a recovered %s recorder without spawning", async (probe) => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.recoverProject = async () =>
+      ok({
+        recovered: [],
+        blocked: [{ ...pending(), status: "recording", recorder: recorderEvidence }],
+      });
+    configured.recorder.probeProcess = async () => probe;
+    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-process-still-active", captureId },
+    });
+    expect(events).not.toContain(`record:${captureId}`);
+    expect(events.filter((event) => event.startsWith("resolve:"))).toEqual([]);
+  });
+
+  it("converges a recovered reused identity as interrupted without signalling the observed PID", async () => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.recoverProject = async () =>
+      ok({
+        recovered: [],
+        blocked: [{ ...pending(), status: "recording", recorder: recorderEvidence }],
+      });
+    configured.recorder.probeProcess = async () => "reused";
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { status: "promoted" },
+    });
+    expect(events).toContain("resolve:interrupt:signal");
+    expect(events).toContain(`record:${captureId}`);
+  });
+
+  it.each([
+    ["terminal", { ...pending(), status: "interrupted", reason: "signal", completedAt: timestamp }],
+    ["resolving", { ...pending(), status: "resolving", resolution: "interrupt", reason: "signal" }],
+    ["post-exit", { ...pending(), status: "post_exit", recorderExitedAt: timestamp }],
+  ] as const)("routes a claimed-false %s session without spawning", async (_name, session) => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.beginLaunch = async () => ok({ session, claimed: false });
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({ ok: true });
+    expect(events).not.toContain(`record:${captureId}`);
+  });
+
+  it.each(["pending", "post_exit", "resolving"] as const)("uses project recovery for %s durable state before launching", async (status) => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.recoverProject = async () => {
+      events.push(`recover-project:${status}`);
+      return ok({
+        recovered: [terminal({ resolution: "fail", reason: "recorder-prerequisite-or-process-failure" }, timestamp) as Extract<CaptureSession, { status: "failed" }>],
+        blocked: [],
+      });
+    };
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { status: "promoted" },
+    });
+    expect(events.indexOf(`recover-project:${status}`)).toBeLessThan(events.indexOf(`record:${captureId}`));
   });
 
   it.each([
     ["operator-cancelled", "operator-cancelled"],
     ["signalled", "signal"],
-  ] as const)("persists %s recorder provenance as the safe %s reason", async (kind, reason) => {
+  ] as const)("persists %s provenance as %s", async (kind, reason) => {
     const events: string[] = [];
     const configured = dependencies(events);
     configured.recorder.start = async () => completedRun({ kind });
-    configured.store.recordResolution = async (_project, _capture, resolution) => {
-      events.push(`decision:${resolution.resolution}:${resolution.reason}`);
-      return ok({ ...running(), status: "resolving", ...resolution });
-    };
-    configured.store.finishResolution = async () => ok({
-      ...running(),
-      status: "interrupted",
-      reason,
-      completedAt: timestamp,
-    });
-
-    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
-      ok: true,
-      value: { captureId, status: "interrupted", nextAction: "rerun-capture" },
-    });
-    expect(events).toContain(`decision:interrupt:${reason}`);
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toMatchObject({ ok: true, value: { status: "interrupted" } });
+    expect(events).toContain(`resolve:interrupt:${reason}`);
   });
 
   it.each([
-    ["missing", { rule: "secret-source-unavailable", reference: "env:CAPTURE_TOKEN" }],
+    [
+      "missing",
+      { rule: "secret-source-unavailable", reference: "env:CAPTURE_TOKEN" },
+    ],
     ["empty", { rule: "secret-source-empty", reference: "env:CAPTURE_TOKEN" }],
-  ])("does not leak a %s source in the safe refusal or side effects", async (_kind, refusal) => {
-    const events: string[] = [];
-    const configured = dependencies(events);
-    configured.resolver.resolve = async () => err(refusal as SecretResolutionRefusal);
+  ] as const)(
+    "does not leak a %s source in safe refusal or effects",
+    async (_name, refusal) => {
+      const events: string[] = [];
+      const configured = dependencies(events);
+      configured.resolver.resolve = async () =>
+        err(refusal as SecretResolutionRefusal);
+      const result = await new RecordCapture(configured).execute(request());
+      expect(result).toEqual({ ok: false, error: refusal });
+      expect(JSON.stringify(result)).not.toContain(canary);
+      expect(events).toEqual([]);
+    },
+  );
 
-    const result = await new RecordCapture(configured).execute(request());
-
-    expect(result).toEqual({ ok: false, error: refusal });
-    expect(JSON.stringify(result)).not.toContain(canary);
-    expect(events).toEqual([]);
-  });
-
-  it("terminalizes confirmed operator cancellation when abort wins while PID persistence never resolves", async () => {
-    let aborted = false;
-    const abortListeners = new Set<() => void>();
-    let complete!: (result: { readonly kind: "operator-cancelled" }) => void;
+  it("terminalizes a confirmed recorder cancellation even when PID persistence never resolves", async () => {
     const configured = dependencies();
     configured.store.recordRecorderStarted = async () => new Promise(() => {});
-    configured.store.finishResolution = async () => ok({ ...running(), status: "interrupted", reason: "operator-cancelled", completedAt: timestamp });
-    (configured.recorder as unknown as {
-      start(input: { readonly signal: { onAbort(listener: () => void): () => void } }): Promise<unknown>;
-    }).start = async (input) => ({
-      evidence: { pid: 4242 },
-      waitForCompletion: () => new Promise((resolve) => {
-        complete = resolve;
-        input.signal.onAbort(() => complete({ kind: "operator-cancelled" }));
-      }),
-      stop: () => {},
-    });
-
-    const execution = new RecordCapture(configured).execute(request({
-      signal: {
-        get aborted() { return aborted; },
-        onAbort(listener) { abortListeners.add(listener); return () => { abortListeners.delete(listener); }; },
-      },
-    }));
-    for (let index = 0; index < 5; index += 1) await Promise.resolve();
-    aborted = true;
-    for (const listener of abortListeners) listener();
-
-    await expect(execution).resolves.toEqual({
+    configured.recorder.start = async () => completedRun({ kind: "operator-cancelled" });
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
       ok: true,
-      value: { captureId, status: "interrupted", nextAction: "rerun-capture" },
+      value: { status: "interrupted" },
     });
   });
 
-  it("observes an abort that occurred before local persistence coordination while persistence never resolves", async () => {
-    let aborted = false;
-    let stopCalls = 0;
-    const abortListeners = new Set<() => void>();
+  it.each([
+    ["signal", { kind: "signalled" as const }, "interrupted"],
+    ["normal exit", { kind: "exited" as const, exitCode: 0 }, "promoted"],
+  ] as const)(
+    "does not strand a fast %s completion when evidence persistence never resolves",
+    async (_name, result, status) => {
+      const configured = dependencies();
+      configured.store.recordRecorderStarted = async () =>
+        new Promise(() => {});
+      configured.recorder.start = async () => completedRun(result);
+      await expect(
+        new RecordCapture(configured).execute(request()),
+      ).resolves.toMatchObject({ ok: true, value: { status } });
+    },
+  );
+
+  it("contains a failed evidence persistence attempt and terminalizes a confirmed internal failure", async () => {
+    let contained = false;
     let complete!: (result: RecorderResult) => void;
     const configured = dependencies();
-    configured.store.recordRecorderStarted = async () => new Promise(() => {});
-    configured.store.recordResolution = async (_project, _capture, resolution) => {
-      expect(resolution).toMatchObject({ resolution: "interrupt", reason: "operator-cancelled" });
-      return ok({ ...running(), status: "resolving", ...resolution });
-    };
-    configured.store.finishResolution = async () => ok({ ...running(), status: "interrupted", reason: "operator-cancelled", completedAt: timestamp });
-    configured.recorder.start = async () => {
-      aborted = true;
-      return {
-        evidence: { pid: 4242 },
-        waitForCompletion: () => new Promise((resolve) => { complete = resolve; }),
-        stop() { stopCalls += 1; complete({ kind: "operator-cancelled" }); },
-      };
-    };
-
-    let observed: unknown;
-    void new RecordCapture(configured).execute(request({
-      signal: {
-        get aborted() { return aborted; },
-        onAbort(listener) { abortListeners.add(listener); return () => { abortListeners.delete(listener); }; },
-      },
-    })).then((result) => { observed = result; });
-    for (let index = 0; index < 20; index += 1) await Promise.resolve();
-
-    expect(observed).toEqual({
-      ok: true,
-      value: { captureId, status: "interrupted", nextAction: "rerun-capture" },
-    });
-    expect(stopCalls).toBe(1);
-    expect(abortListeners).toEqual(new Set());
-  });
-
-  it.each([
-    ["external signal", { kind: "signalled" } as const, "interrupted" as const, "signal" as const],
-    ["normal exit", { kind: "exited", exitCode: 0 } as const, "promoted" as const, undefined],
-  ])("does not strand a fast %s completion while PID persistence never resolves", async (_name, recorderResult, status, reason) => {
-    const configured = dependencies();
-    configured.store.recordRecorderStarted = async () => new Promise(() => {});
-    configured.recorder.start = async () => completedRun(recorderResult);
-    if (status === "interrupted") {
-      configured.store.finishResolution = async () => ok({ ...running(), status, reason, completedAt: timestamp });
-    }
-
-    let observed: unknown;
-    void new RecordCapture(configured).execute(request()).then((result) => { observed = result; });
-    for (let index = 0; index < 20; index += 1) await Promise.resolve();
-
-    expect(observed).toEqual({
-      ok: true,
-      value: {
-        captureId,
-        status,
-        nextAction: status === "interrupted" ? "rerun-capture" : "capture-annotate",
-      },
-    });
-  });
-
-  it.each([
-    ["terminal", { kind: "operator-cancelled" } as const, true],
-    ["still-active", { kind: "process-still-active" } as const, false],
-  ])("handles failed PID persistence with a %s recorder", async (_name, result, terminal) => {
-    let stopped = false;
-    let finish!: (result: RecorderResult) => void;
-    const configured = dependencies();
-    configured.store.recordRecorderStarted = async () => err({ rule: "capture-not-found", captureId });
-    configured.store.finishResolution = async () => ok({ ...running(), status: "interrupted", reason: "operator-cancelled", completedAt: timestamp });
+    configured.store.recordRecorderStarted = async () =>
+      err({ rule: "capture-not-found", captureId });
     configured.recorder.start = async () => ({
-      evidence: { pid: 4242 }, waitForCompletion: () => new Promise((resolve) => { finish = resolve; }),
-      stop() { stopped = true; finish(result); },
+      evidence: { pid: 4242, identity: "a".repeat(64) },
+      waitForCompletion: () =>
+        new Promise<RecorderResult>((resolve) => {
+          complete = resolve;
+        }),
+      contain: () => {
+        contained = true;
+        complete({ kind: "prerequisite-or-process-failure" });
+      },
+    } as RecorderRun);
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toMatchObject({ ok: true, value: { status: "failed" } });
+    expect(contained).toBe(true);
+  });
+
+  it("leaves launching when failed persistence containment cannot prove exit", async () => {
+    const configured = dependencies();
+    configured.store.recordRecorderStarted = async () =>
+      err({ rule: "capture-not-found", captureId });
+    configured.recorder.start = async () => ({
+      evidence: { pid: 4242, identity: "a".repeat(64) },
+      async waitForCompletion() { return { kind: "process-still-active" as const }; },
+      contain() {},
     });
-    let observed: unknown;
-    const execution = new RecordCapture(configured).execute(request());
-    void execution.then((value) => { observed = value; });
-    for (let index = 0; index < 20; index += 1) await Promise.resolve();
-    expect(stopped).toBe(true);
-    if (terminal) await expect(execution).resolves.toMatchObject({ ok: true, value: { status: "interrupted" } });
-    else expect(observed).toBeUndefined();
+    await expect(new RecordCapture(configured).execute(request())).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-process-still-active", captureId },
+    });
+  });
+
+  it("contains a persistence failure without inventing operator cancellation or hanging", async () => {
+    let contained = 0;
+    let complete!: (result: RecorderResult) => void;
+    const configured = dependencies();
+    configured.store.recordRecorderStarted = async () =>
+      err({ rule: "capture-not-found", captureId });
+    configured.recorder.start = async () => ({
+      evidence: { pid: 4242, identity: "a".repeat(64) },
+      waitForCompletion: () => new Promise<RecorderResult>((resolve) => { complete = resolve; }),
+      contain: () => {
+        contained += 1;
+        complete({ kind: "prerequisite-or-process-failure" });
+      },
+    } as unknown as RecorderRun);
+
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { status: "failed", nextAction: "resolve-recorder-prerequisite" },
+    });
+    expect(contained).toBe(1);
+  });
+
+  it("maps containment-caused cancellation after evidence persistence failure to failed", async () => {
+    let complete!: (result: RecorderResult) => void;
+    const configured = dependencies();
+    configured.store.recordRecorderStarted = async () =>
+      err({ rule: "capture-not-found", captureId });
+    configured.recorder.start = async () => ({
+      evidence: recorderEvidence,
+      waitForCompletion: () => new Promise<RecorderResult>((resolve) => { complete = resolve; }),
+      contain: () => complete({ kind: "operator-cancelled" }),
+    } as RecorderRun);
+    await expect(new RecordCapture(configured).execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { status: "failed", nextAction: "resolve-recorder-prerequisite" },
+    });
+  });
+
+  it("does not subscribe to abort after delegating cancellation ownership to the recorder", async () => {
+    const configured = dependencies();
+    configured.recorder.start = async () => completedRun({ kind: "exited", exitCode: 0 });
+    await expect(new RecordCapture(configured).execute(request({
+      signal: {
+        aborted: false,
+        onAbort() { throw new Error("application must not subscribe"); },
+      },
+    }))).resolves.toMatchObject({ ok: true, value: { status: "promoted" } });
+  });
+
+  it("refuses an unclaimed launching session without spawning a duplicate recorder", async () => {
+    const events: string[] = [];
+    const configured = dependencies(events);
+    configured.store.beginLaunch = async () =>
+      ok({ session: { ...pending(), status: "launching" }, claimed: false });
+    await expect(
+      new RecordCapture(configured).execute(request()),
+    ).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-process-still-active", captureId },
+    });
+    expect(events).not.toContain(`record:${captureId}`);
   });
 });

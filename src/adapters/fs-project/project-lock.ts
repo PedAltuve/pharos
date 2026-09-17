@@ -23,6 +23,10 @@ export interface ProjectLockOptions {
   readonly pollMs?: number;
 }
 
+export interface ProjectLease {
+  release(): Promise<void>;
+}
+
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
@@ -54,7 +58,6 @@ export class ProjectLock {
   readonly staleAfterMs: number;
   readonly pollMs: number;
   private readonly lockPath: string;
-  private heldNonce: string | null = null;
 
   constructor(projectRoot: string, options: ProjectLockOptions = {}) {
     this.waitMs = options.waitMs ?? 5_000;
@@ -66,13 +69,12 @@ export class ProjectLock {
     this.lockPath = join(projectRoot, "lock");
   }
 
-  async acquire(): Promise<Result<void, LockUnavailable>> {
+  async acquire(): Promise<Result<ProjectLease, LockUnavailable>> {
     const startedAt = Date.now();
     let backoffMs = Math.max(1, this.pollMs);
     while (true) {
       try {
-        this.heldNonce = await this.createHolder();
-        return ok(undefined);
+        return ok(this.lease(await this.createHolder()));
       } catch (error) {
         if (!isErrnoException(error) || error.code !== "EEXIST") {
           throw error;
@@ -134,16 +136,30 @@ export class ProjectLock {
     }
   }
 
-  async release(): Promise<void> {
-    if (this.heldNonce === null) {
-      throw new Error("lock is not held by the caller");
-    }
-    const holder = await this.readHolder();
-    if (holder.nonce !== this.heldNonce) {
-      throw new Error("lock nonce no longer belongs to the caller");
-    }
-    await this.breakLock();
-    this.heldNonce = null;
+  private lease(nonce: string): ProjectLease {
+    let state: "active" | "releasing" | "released" = "active";
+    return {
+      release: async (): Promise<void> => {
+        if (state === "releasing") {
+          throw new Error("lock lease is already being released");
+        }
+        if (state === "released") {
+          throw new Error("lock lease has already been released");
+        }
+        state = "releasing";
+        try {
+          const holder = await this.readHolder();
+          if (holder.nonce !== nonce) {
+            throw new Error("lock nonce no longer belongs to the caller");
+          }
+          await this.breakLock();
+          state = "released";
+        } catch (error) {
+          state = "active";
+          throw error;
+        }
+      },
+    };
   }
 
   private async createHolder(): Promise<string> {
@@ -229,7 +245,7 @@ export class ProjectLock {
     startedAt: number,
     holderPid: number | null,
     backoffMs: number,
-  ): Promise<Result<void, LockUnavailable> | undefined> {
+  ): Promise<Result<never, LockUnavailable> | undefined> {
     const waitedMs = Date.now() - startedAt;
     if (waitedMs >= this.waitMs) {
       return err({ rule: "lock-unavailable", holderPid, waitedMs });
