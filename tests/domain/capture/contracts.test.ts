@@ -23,7 +23,7 @@ const common = {
   createdAt: "2026-03-01T00:00:00.000Z",
 } as const;
 
-describe("CaptureSession v1 annotation eligibility", () => {
+describe("CaptureSession v2 annotation eligibility", () => {
   it("accepts generated capture IDs and only terminal promoted sessions", () => {
     expect(isCaptureId(captureId)).toBe(true);
     expect(isCaptureId("cap_018f47de-7a00-6cc0-8000-000000000001")).toBe(false);
@@ -42,7 +42,9 @@ describe("CaptureSession v1 annotation eligibility", () => {
   });
 
   const nonPromoted: readonly CaptureSession[] = [
-    { ...common, status: "running" },
+    { ...common, status: "pending" },
+    { ...common, status: "launching" },
+    { ...common, status: "recording", recorder: { pid: 4242, identity: "a".repeat(64) } },
     { ...common, status: "post_exit", recorderExitedAt: "2026-03-01T00:01:00.000Z" },
     { ...common, status: "resolving", resolution: "promote" },
     { ...common, status: "rejected", reason: "sensitive-content", detectionCount: 1, completedAt: "2026-03-01T00:01:00.000Z" },

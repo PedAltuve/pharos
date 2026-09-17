@@ -329,6 +329,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       // (1a) D1b/D1e — the journal is project-global, so complete pending
       // draft replays across every beacon before its lookup.
@@ -375,7 +376,7 @@ export class FsBeaconStore implements BeaconStore {
 
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -399,6 +400,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       // (1a) D1b/D1e — same project-wide pre-lookup replay step.
       await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
@@ -435,7 +437,7 @@ export class FsBeaconStore implements BeaconStore {
 
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -459,6 +461,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       // (1a) D1b/D1e — same project-wide pre-lookup replay step.
       await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
@@ -495,7 +498,7 @@ export class FsBeaconStore implements BeaconStore {
 
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -513,6 +516,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       // D1b/D1e — complete every pending committed draft mutation project-wide
       // before the project-global journal lookup.
@@ -560,7 +564,7 @@ export class FsBeaconStore implements BeaconStore {
       });
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -581,6 +585,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
       const hash = keyHash(key);
@@ -652,7 +657,7 @@ export class FsBeaconStore implements BeaconStore {
       });
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -662,6 +667,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       const authoritative = await scanRecovery(this.projectRoot);
       if (authoritative.actions.length > 0) {
@@ -670,7 +676,7 @@ export class FsBeaconStore implements BeaconStore {
       const postScan = await scanRecovery(this.projectRoot);
       return ok({ artifacts: postScan.artifacts, actions: authoritative.actions });
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 
@@ -688,6 +694,7 @@ export class FsBeaconStore implements BeaconStore {
 
     const acquired = await this.lock.acquire();
     if (!acquired.ok) return err(acquired.error);
+    const lease = acquired.value;
     try {
       await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
       const hash = keyHash(key);
@@ -729,7 +736,7 @@ export class FsBeaconStore implements BeaconStore {
       });
       return mutated;
     } finally {
-      await this.lock.release();
+      await lease.release();
     }
   }
 }
