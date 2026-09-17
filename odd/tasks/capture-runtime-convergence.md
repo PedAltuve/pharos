@@ -166,8 +166,9 @@ Human review invalidated delivery readiness after the first native receipt. PR #
   - RED: seven application cases failed before project-wide blocker convergence and unclaimed routing; direct concurrent launch proved two different requests could both claim before project-exclusive launch was added.
   - Outcome: `recoverProject()` deterministically converges safe project sessions and reports unsafe blockers; `beginLaunch()` is the only launch API and grants one project-wide spawn authority under one lease; detached evidence persistence is consumed and contained while recorder completion remains the sole awaited lifecycle.
   - Checks: independent verifier passed all seven CRR-4 invariants; recorder/store/application/integration suite 166/166 (19/104/41/2); lint, typecheck, and diff-check passed.
-- [ ] **CRR-5 — Verify and replace delivery evidence.** Run focused suites, full hermetic tests, lint, typecheck, build, and diff-check; independently validate all seven blockers and three minor findings; start a new native review for the new candidate before pushing PR #73.
-  - Checks: every failed, skipped, or pending command disclosed; no merge.
+- [x] **CRR-5 — Verify and replace delivery evidence.** Run focused suites, full hermetic tests, lint, typecheck, build, and diff-check; independently validate all seven blockers and three minor findings; start a new native review for the new candidate before pushing PR #73.
+  - Outcome: the independent audit cleared all ten original findings after replacing second-precision macOS identity with a per-launch ownership marker. Native lineage `review-6a318069137e0bc3` found and validated one bounded correction: rejected post-spawn identity observation now retains and contains the owned run. The approved authority was acknowledged and burned before delivery.
+  - Checks: focused lifecycle suite 169/169; full suite 41 files and 519/519 tests; lint, typecheck, build, and diff-check passed with no failed, skipped, or pending commands. PR #73 was updated without merge.
 
 ### Review workload and delivery
 
@@ -175,4 +176,4 @@ The maintainer already accepted a single-PR size exception for PR #73. Keep revi
 
 ## Next Step
 
-Implement CRR-5 without pushing or claiming replacement review approval until the full candidate passes independent and native review.
+PR #73 is ready for human review. Merge remains a separate explicit maintainer decision; no automatic merge is authorized.
