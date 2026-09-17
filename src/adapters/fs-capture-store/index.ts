@@ -12,7 +12,7 @@ import type {
   PromotedCaptureArtifact,
   RequestId,
 } from "../../domain/capture/index.js";
-import type { CaptureSessionCommon } from "../../domain/capture/types.js";
+import type { CaptureSessionCommon, RecorderProcessEvidence } from "../../domain/capture/types.js";
 import type { ProjectId } from "../../domain/project/index.js";
 import { CAPTURE_SESSION_CONTRACT, isCaptureId } from "../../domain/capture/index.js";
 import { isProjectId } from "../../domain/project/index.js";
@@ -119,6 +119,14 @@ function isTerminalStatus(value: unknown): value is TerminalCaptureStatus {
   return value === "promoted" || value === "rejected" || value === "failed" || value === "interrupted";
 }
 
+function isRecorderProcessEvidence(value: unknown): value is RecorderProcessEvidence {
+  return isRecord(value)
+    && hasOnlyKeys(value, ["pid"])
+    && typeof value.pid === "number"
+    && Number.isSafeInteger(value.pid)
+    && value.pid > 0;
+}
+
 function requestFrom(value: unknown, expectedCaptureId?: CaptureId, requestId?: RequestId): StoredRequest | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, value.completion === undefined
     ? ["projectId", "captureId", "requestId", "inputHash", "secretSourceReferences", "createdAt"]
@@ -182,7 +190,12 @@ function sessionFrom(value: unknown, captureId: CaptureId): Result<CaptureSessio
   const common = commonFrom(value, captureId);
   if (common === undefined) return captureRefusal(captureId);
   const commonKeys = ["contract", "projectId", "captureId", "requestId", "inputHash", "secretSourceReferences", "createdAt", "status"];
-  if (value.status === "running" && hasOnlyKeys(value, commonKeys)) return ok({ ...common, status: "running" });
+  if (value.status === "running") {
+    if (hasOnlyKeys(value, commonKeys)) return ok({ ...common, status: "running" });
+    if (hasOnlyKeys(value, [...commonKeys, "recorder"]) && isRecorderProcessEvidence(value.recorder)) {
+      return ok({ ...common, status: "running", recorder: value.recorder });
+    }
+  }
   if (value.status === "post_exit" && hasOnlyKeys(value, [...commonKeys, "recorderExitedAt"]) && isCanonicalTimestamp(value.recorderExitedAt)) {
     return ok({ ...common, status: "post_exit", recorderExitedAt: value.recorderExitedAt });
   }
@@ -366,6 +379,19 @@ export class FsCaptureStore implements CaptureStore {
     }
   }
 
+  async recordRecorderStarted(projectId: ProjectId, captureId: CaptureId, evidence: RecorderProcessEvidence): Promise<Result<CaptureSession, CaptureRefusal>> {
+    return this.mutate(captureId, async (session) => {
+      if (session.projectId !== projectId || !isRecorderProcessEvidence(evidence)) return captureRefusal(captureId);
+      if (session.status !== "running") return transitionRefusal(captureId, session.status, "resolving");
+      if (session.recorder !== undefined) {
+        return session.recorder.pid === evidence.pid ? ok(session) : captureRefusal(captureId);
+      }
+      const next: CaptureSession = { ...commonOf(session), status: "running", recorder: evidence };
+      await this.writeSession(next);
+      return ok(next);
+    });
+  }
+
   async markPostExit(projectId: ProjectId, captureId: CaptureId, exitedAt: string): Promise<Result<CaptureSession, CaptureRefusal>> {
     return this.mutate(captureId, async (session) => {
       if (session.projectId !== projectId) return captureRefusal(captureId);
@@ -396,6 +422,10 @@ export class FsCaptureStore implements CaptureStore {
     if (!isCanonicalTimestamp(completedAt)) return captureRefusal(captureId);
     return this.mutate(captureId, async (session) => {
       if (session.projectId !== projectId) return captureRefusal(captureId);
+      if (isTerminalStatus(session.status)) {
+        const completion = await this.writeRequestCompletion(session);
+        return completion.ok ? ok(session) : completion;
+      }
       if (session.status !== "resolving") return transitionRefusal(captureId, session.status, "terminal");
       const resolving = session as StoredResolving;
       const next = await this.completeResolution(resolving, completedAt);

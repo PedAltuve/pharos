@@ -75,6 +75,21 @@ describe("FsCaptureStore lifecycle", () => {
     expect(await readFile(sessionPath, "utf8")).toContain('"status":"running"');
   });
 
+  it("persists only a safe recorder PID for a running capture", async () => {
+    const store = new FsCaptureStore({ projectRoot: root });
+    await store.begin(begin());
+
+    await expect((store as typeof store & {
+      recordRecorderStarted(project: typeof projectId, capture: typeof captureId, evidence: { readonly pid: number }): Promise<unknown>;
+    }).recordRecorderStarted(projectId, captureId, { pid: 4242 })).resolves.toMatchObject({
+      ok: true,
+      value: { status: "running", recorder: { pid: 4242 } },
+    });
+    const persisted = await readFile(join(root, "captures", captureId, "session.json"), "utf8");
+    expect(persisted).toContain('"recorder":{"pid":4242}');
+    expect(persisted).not.toContain("recording.spec.ts");
+  });
+
   it.each([
     ["fail", "failed"],
     ["interrupt", "interrupted"],
@@ -102,6 +117,67 @@ describe("FsCaptureStore lifecycle", () => {
     const stored = await readFile(join(root, "captures", captureId, "session.json"), "utf8");
     expect(stored).not.toContain("CANARY-SECRET");
     await expect(store.begin({ ...begin(), inputHash: "sha256:other" })).resolves.toEqual({ ok: false, error: { rule: "capture-request-conflict", requestId } });
+  });
+
+  it("converges an original finish after recovery completes its durable decision", async () => {
+    let releaseDecisionRecorded!: () => void;
+    const decisionRecorded = new Promise<void>((resolve) => { releaseDecisionRecorded = resolve; });
+    const original = new FsCaptureStore({ projectRoot: root, observer: { onStage(stage) {
+      if (stage === "resolution-decision-recorded") releaseDecisionRecorded();
+    } } });
+    const recovery = new FsCaptureStore({ projectRoot: root });
+    await original.begin(begin());
+    await original.recordResolution(projectId, captureId, {
+      resolution: "interrupt",
+      recordedAt: "2026-03-01T00:01:00.000Z",
+      reason: "signal",
+    });
+    await decisionRecorded;
+    const recovered = await recovery.recover(projectId);
+    if (!recovered.ok) throw new Error("expected recovery to terminalize the durable decision");
+    expect(recovered.value).toMatchObject([expect.objectContaining({ status: "interrupted" })]);
+    const originalFinish = await original.finishResolution(projectId, captureId, "2026-03-01T00:02:00.000Z");
+    expect(originalFinish).toEqual({ ok: true, value: recovered.value[0] });
+  });
+
+  it("repairs request completion when a terminal session was written before the journal", async () => {
+    let crashAfterTerminalWrite = false;
+    const crashing = new FsCaptureStore({ projectRoot: root, observer: { onStage(stage) {
+      if (crashAfterTerminalWrite && stage === "session-written") throw new Error("injected terminal journal crash");
+    } } });
+    await crashing.begin(begin());
+    await crashing.recordResolution(projectId, captureId, {
+      resolution: "interrupt",
+      recordedAt: "2026-03-01T00:01:00.000Z",
+      reason: "signal",
+    });
+    crashAfterTerminalWrite = true;
+    await expect(crashing.finishResolution(projectId, captureId, "2026-03-01T00:02:00.000Z")).rejects.toThrow("injected terminal journal crash");
+    crashAfterTerminalWrite = false;
+
+    await expect(new FsCaptureStore({ projectRoot: root }).finishResolution(projectId, captureId, "2026-03-01T00:03:00.000Z"))
+      .resolves.toMatchObject({ ok: true, value: { status: "interrupted", completedAt: "2026-03-01T00:02:00.000Z" } });
+    const journalPath = join(root, "capture-journal", "requests", `${createHash("sha256").update(requestId).digest("hex")}.json`);
+    expect(await readFile(journalPath, "utf8")).toContain('"completion":{"status":"interrupted"');
+  });
+
+  it("continues to reject a conflicting resolution after a durable decision", async () => {
+    const store = new FsCaptureStore({ projectRoot: root });
+    await store.begin(begin());
+    await store.recordResolution(projectId, captureId, {
+      resolution: "interrupt",
+      recordedAt: "2026-03-01T00:01:00.000Z",
+      reason: "signal",
+    });
+
+    await expect(store.recordResolution(projectId, captureId, {
+      resolution: "fail",
+      recordedAt: "2026-03-01T00:02:00.000Z",
+      reason: "recorder-exit",
+    })).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-illegal-transition", captureId, from: "resolving", to: "resolving" },
+    });
   });
 
   it("replays the persisted identity when generated capture ID and creation time advance", async () => {

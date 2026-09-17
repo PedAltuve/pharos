@@ -19,7 +19,13 @@ export interface CaptureSessionCommon {
   readonly secretSourceReferences: readonly string[];
   readonly createdAt: string;
 }
-export interface RunningCaptureSession extends CaptureSessionCommon { readonly status: "running"; }
+/** A PID captured from an adapter-owned recorder child; it proves only that a PID was observed. */
+export interface RecorderProcessEvidence { readonly pid: number; }
+/** A missing recorder field exposes the unavoidable spawn-to-persistence crash window and is never replayed. */
+export interface RunningCaptureSession extends CaptureSessionCommon {
+  readonly status: "running";
+  readonly recorder?: RecorderProcessEvidence;
+}
 export interface PostExitCaptureSession extends CaptureSessionCommon { readonly status: "post_exit"; readonly recorderExitedAt: string; }
 export interface ResolvingCaptureSession extends CaptureSessionCommon {
   readonly status: "resolving";

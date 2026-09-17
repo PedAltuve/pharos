@@ -7,6 +7,7 @@ import type {
   Hasher,
   IdGenerator,
   Recorder,
+  RecorderResult,
   RecorderTerminalMode,
   SecretResolutionRefusal,
   SecretResolver,
@@ -83,6 +84,7 @@ export class RecordCapture {
       ? { ok: true as const, value: { values: new Map<string, string>(), dispose: () => {} } }
       : await this.dependencies.resolver.resolve(request.secretSourceReferences);
     if (!resolved.ok) return resolved;
+    const { values: resolvedSecrets, dispose } = resolved.value;
 
     try {
       const recovered = await this.dependencies.store.recover(request.projectId);
@@ -116,37 +118,86 @@ export class RecordCapture {
       }
       if (session.status === "post_exit") {
         return session.secretSourceReferences.length === 0
-          ? await this.scanAndTerminalize(request.projectId, session.captureId, resolved.value.values)
+          ? await this.scanAndTerminalize(request.projectId, session.captureId, resolvedSecrets)
           : await this.terminalize(request.projectId, session.captureId, "reject", "scan-incomplete", undefined, 0);
       }
+      if (session.recorder !== undefined) {
+        // A live or reused PID is never treated as ours; only observed absence permits recovery.
+        if (await this.dependencies.recorder.isProcessActive(session.recorder)) {
+          return err({ rule: "capture-process-still-active", captureId: session.captureId });
+        }
+        return await this.terminalize(request.projectId, session.captureId, "interrupt", "signal");
+      }
+      // A crash between child spawn and recorder-PID persistence leaves no safe recovery evidence.
       if (session.captureId !== proposedCaptureId || session.createdAt !== createdAt) {
         return err({ rule: "capture-process-still-active", captureId: session.captureId });
       }
 
-      const recorder = await this.dependencies.recorder.record({
+      const run = await this.dependencies.recorder.start({
         projectId: request.projectId,
         captureId: session.captureId,
         url: request.url,
         terminalMode: request.terminalMode,
         signal: request.signal,
       });
-      if (recorder.kind === "interrupted") return await this.terminalize(request.projectId, session.captureId, "interrupt", "operator-cancelled");
-      if (recorder.kind === "prerequisite-or-process-failure") {
-        return await this.terminalize(request.projectId, session.captureId, "fail", "recorder-prerequisite-or-process-failure");
-      }
-      if (recorder.exitCode !== 0) return await this.terminalize(request.projectId, session.captureId, "fail", "recorder-exit");
+      const completion = run.waitForCompletion();
+      if (run.evidence === undefined) return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
 
-      const postExit = await this.dependencies.store.markPostExit(request.projectId, session.captureId, this.now());
-      if (!postExit.ok) return postExit;
-      return await this.scanAndTerminalize(request.projectId, session.captureId, resolved.value.values);
+      const persistence = this.dependencies.store.recordRecorderStarted(request.projectId, session.captureId, run.evidence)
+        .then((started) => started.ok, () => false);
+      const recorderCompletion = completion.then((recorder) => ({ kind: "completion" as const, recorder }));
+      let notifyAbort!: () => void;
+      const aborted = new Promise<void>((resolveAbort) => { notifyAbort = resolveAbort; });
+      const removeAbort = request.signal.onAbort(notifyAbort);
+      if (request.signal.aborted) notifyAbort();
+      try {
+        const first = await Promise.race([
+          recorderCompletion,
+          persistence.then((persisted) => ({ kind: "persistence" as const, persisted })),
+          aborted.then(() => ({ kind: "aborted" as const })),
+        ]);
+        if (first.kind === "completion") {
+          if ((first.recorder.kind === "process-still-active" || first.recorder.kind === "unpersisted-process") && !await persistence) return new Promise<Result<RecordedCapture, RecordCaptureRefusal>>(() => {});
+          return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
+        }
+        if (first.kind === "aborted" || !first.persisted) run.stop();
+        const recorder = await completion;
+        if ((recorder.kind === "process-still-active" || recorder.kind === "unpersisted-process")
+          && (first.kind === "persistence" ? !first.persisted : !await persistence)) return new Promise<Result<RecordedCapture, RecordCaptureRefusal>>(() => {});
+        return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
+      } finally {
+        removeAbort();
+      }
+      return await this.completeRecorder(session.captureId, request.projectId, completion, resolvedSecrets);
     } finally {
-      resolved.value.dispose();
+      dispose();
     }
   }
 
   private hasExplicitSecretDeclaration(request: RecordCaptureRequest): boolean {
     return (request.noSecretSources && request.secretSourceReferences.length === 0)
       || (!request.noSecretSources && request.secretSourceReferences.length > 0);
+  }
+
+  private async completeRecorder(
+    captureId: CaptureId,
+    projectId: ProjectId,
+    completion: Promise<RecorderResult>,
+    resolvedSecrets: ReadonlyMap<string, string>,
+  ): Promise<Result<RecordedCapture, RecordCaptureRefusal>> {
+    const recorder = await completion;
+    if (recorder.kind === "process-still-active" || recorder.kind === "unpersisted-process") {
+      return err({ rule: "capture-process-still-active", captureId });
+    }
+    if (recorder.kind === "operator-cancelled") return await this.terminalize(projectId, captureId, "interrupt", "operator-cancelled");
+    if (recorder.kind === "signalled") return await this.terminalize(projectId, captureId, "interrupt", "signal");
+    if (recorder.kind === "prerequisite-or-process-failure") {
+      return await this.terminalize(projectId, captureId, "fail", "recorder-prerequisite-or-process-failure");
+    }
+    if (recorder.exitCode !== 0) return await this.terminalize(projectId, captureId, "fail", "recorder-exit");
+    const postExit = await this.dependencies.store.markPostExit(projectId, captureId, this.now());
+    if (!postExit.ok) return postExit;
+    return await this.scanAndTerminalize(projectId, captureId, resolvedSecrets);
   }
 
   private async scanAndTerminalize(

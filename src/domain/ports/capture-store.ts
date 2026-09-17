@@ -9,6 +9,7 @@ import type {
   PromotedCaptureArtifact,
   RequestId,
 } from "../capture/index.js";
+import type { RecorderProcessEvidence } from "../capture/types.js";
 import type { ProjectId } from "../project/index.js";
 
 export interface BeginCaptureCommand {
@@ -31,6 +32,8 @@ export interface ResolutionRecord {
 /** Owns supporting capture state and associations; it never owns Beacon data. */
 export interface CaptureStore {
   begin(command: BeginCaptureCommand): Promise<Result<CaptureSession, CaptureRefusal>>;
+  /** Records adapter-observed PID evidence after spawn; a crash before this call remains deliberately unreplayable. */
+  recordRecorderStarted(projectId: ProjectId, captureId: CaptureId, evidence: RecorderProcessEvidence): Promise<Result<CaptureSession, CaptureRefusal>>;
   markPostExit(projectId: ProjectId, captureId: CaptureId, exitedAt: string): Promise<Result<CaptureSession, CaptureRefusal>>;
   recordResolution(projectId: ProjectId, captureId: CaptureId, resolution: ResolutionRecord): Promise<Result<CaptureSession, CaptureRefusal>>;
   finishResolution(projectId: ProjectId, captureId: CaptureId, completedAt: string): Promise<Result<CaptureSession, CaptureRefusal>>;
