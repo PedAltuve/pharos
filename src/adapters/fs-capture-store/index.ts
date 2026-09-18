@@ -368,6 +368,14 @@ function sameAssociation(left: CaptureBeaconAssociation, right: CaptureBeaconAss
     && left.committedAt === right.committedAt;
 }
 
+/** Replay identity deliberately excludes generated IDs and timestamps. */
+function sameAnnotationRequest(left: CaptureBeaconAssociation, right: CaptureBeaconAssociation): boolean {
+  return left.projectId === right.projectId
+    && left.captureId === right.captureId
+    && left.requestId === right.requestId
+    && left.inputHash === right.inputHash;
+}
+
 /** Filesystem owner for non-authoritative capture state. It never reads or writes BeaconStore data. */
 export class FsCaptureStore implements CaptureStore {
   private readonly projectRoot: string;
@@ -788,36 +796,43 @@ export class FsCaptureStore implements CaptureStore {
     if (!acquired.ok) throw new Error("capture project lock is unavailable");
     const lease = acquired.value;
     try {
-      const forward = await this.readAssociationFile(this.captureAssociationPath(association.captureId), association.projectId, association.captureId, association.beaconId);
+      // The capture-side claim is authoritative for replay identity. Do not
+      // reject a retry merely because its newly generated IDs differ.
+      const forward = await this.readAssociationFile(this.captureAssociationPath(association.captureId), association.projectId, association.captureId);
       if (!forward.ok) return forward;
-      const reverse = await this.readAssociationFile(this.beaconAssociationPath(association.beaconId), association.projectId, undefined, association.beaconId);
+      const replayBeaconId = forward.value?.beaconId ?? association.beaconId;
+      const reverse = await this.readAssociationFile(this.beaconAssociationPath(replayBeaconId), association.projectId, undefined, replayBeaconId);
       if (!reverse.ok) return reverse;
-      for (const existing of [forward.value, reverse.value]) {
-        if (existing !== null && !sameAssociationClaim(existing, requested.value)) {
-          return err({ rule: "capture-association-conflict", captureId: association.captureId });
-        }
-      }
-
-      const existing = [forward.value, reverse.value].filter((value): value is CaptureBeaconAssociation => value !== null);
-      const committed = existing.find((value) => value.state === "committed");
-      if (committed !== undefined && !sameAssociation(committed, requested.value) && expectedState === "committed") {
-        return err({ rule: "capture-association-conflict", captureId: association.captureId });
-      }
       if (forward.value !== null && reverse.value !== null && forward.value.state === reverse.value.state && !sameAssociation(forward.value, reverse.value)) {
         return err({ rule: "capture-association-conflict", captureId: association.captureId });
       }
-
-      const target = committed ?? requested.value;
-      if (!sameAssociationClaim(target, requested.value)) return err({ rule: "capture-association-conflict", captureId: association.captureId });
-      if (forward.value === null || !sameAssociation(forward.value, target)) {
-        await writePrivateJson(this.captureAssociationPath(target.captureId), target);
-        await this.notify("association-capture-written", target.captureId);
+      const existing = [forward.value, reverse.value].filter((value): value is CaptureBeaconAssociation => value !== null);
+      for (const stored of existing) {
+        if (!sameAnnotationRequest(stored, requested.value)) {
+          return err({ rule: "capture-association-conflict", captureId: association.captureId });
+        }
       }
-      if (reverse.value === null || !sameAssociation(reverse.value, target)) {
-        await writePrivateJson(this.beaconAssociationPath(target.beaconId), target);
-        await this.notify("association-beacon-written", target.captureId);
+      const committed = existing.find((value) => value.state === "committed");
+      if (committed !== undefined && expectedState === "committed"
+        && (committed.semanticHash !== requested.value.semanticHash || !sameAssociationClaim(committed, requested.value))) {
+        return err({ rule: "capture-association-conflict", captureId: association.captureId });
       }
-      return ok(target);
+      const target = committed ?? existing[0] ?? requested.value;
+      if (expectedState === "committed" && target.state !== "committed") {
+        if (!sameAssociationClaim(target, requested.value)) return err({ rule: "capture-association-conflict", captureId: association.captureId });
+      }
+      const completed = expectedState === "committed" && target.state !== "committed"
+        ? requested.value
+        : target;
+      if (forward.value === null || !sameAssociation(forward.value, completed)) {
+        await writePrivateJson(this.captureAssociationPath(completed.captureId), completed);
+        await this.notify("association-capture-written", completed.captureId);
+      }
+      if (reverse.value === null || !sameAssociation(reverse.value, completed)) {
+        await writePrivateJson(this.beaconAssociationPath(completed.beaconId), completed);
+        await this.notify("association-beacon-written", completed.captureId);
+      }
+      return ok(completed);
     } finally { await lease.release(); }
   }
 

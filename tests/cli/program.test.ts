@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createUnregisteredCommandSet } from "../../src/cli/composition.js";
 import {
   createProgram,
   loadPackageVersion,
@@ -13,16 +14,13 @@ const repoRoot = path.resolve(
   "../..",
 );
 
-const FORBIDDEN_VOCABULARY = [
-  "beacon",
-  "browser",
-  "storage",
-  "recording",
-  "annotation",
+const FORBIDDEN_LATER_LIFECYCLE_VOCABULARY = [
   "approval",
   "revocation",
-  "draft",
-  "json",
+  "generation",
+  "execution",
+  "evidence",
+  "verification",
 ];
 
 function makeWriters() {
@@ -38,6 +36,14 @@ function makeWriters() {
       errLines.push(text);
     },
   };
+}
+
+function createComposedCommands() {
+  const { writeOut, writeErr } = makeWriters();
+  return createUnregisteredCommandSet({
+    writers: { writeOut, writeErr },
+    setExitCode: () => {},
+  });
 }
 
 describe("runCli --version", () => {
@@ -65,7 +71,7 @@ describe("runCli --version", () => {
 });
 
 describe("runCli --help and no arguments", () => {
-  it("identifies pharos, lists no commands, and avoids product vocabulary on --help", async () => {
+  it("identifies pharos and lists exactly the supported guided journey on --help", async () => {
     const { outLines, errLines, writeOut, writeErr } = makeWriters();
 
     const status = await runCli(["node", "pharos", "--help"], {
@@ -81,8 +87,15 @@ describe("runCli --help and no arguments", () => {
     expect(output).toContain("pharos");
     expect(output).toContain("-h, --help");
     expect(output).toContain("-V, --version");
-    expect(output).not.toContain("Commands:");
-    for (const term of FORBIDDEN_VOCABULARY) {
+    for (const command of [
+      "pharos init",
+      "pharos capture record",
+      "pharos capture annotate <capture-id>",
+      "pharos beacon inspect <beacon-id>",
+    ]) {
+      expect(output).toContain(command);
+    }
+    for (const term of FORBIDDEN_LATER_LIFECYCLE_VOCABULARY) {
       expect(lowerOutput).not.toContain(term);
     }
   });
@@ -100,23 +113,45 @@ describe("runCli --help and no arguments", () => {
     expect(status).toBe(0);
     expect(errLines).toEqual([]);
     expect(output).toContain("pharos");
-    expect(output).not.toContain("Commands:");
+    expect(output).toContain("pharos init");
+    expect(output).toContain("pharos capture record");
+    expect(output).toContain("pharos capture annotate <capture-id>");
+    expect(output).toContain("pharos beacon inspect <beacon-id>");
   });
 });
 
 describe("createProgram command catalogue", () => {
-  it("registers zero subcommands", () => {
-    const program = createProgram({ version: "1.0.0" });
+  it("registers only the complete guided journey without aliases", () => {
+    const program = createProgram(createComposedCommands(), { version: "1.0.0" });
 
-    expect(program.commands).toHaveLength(0);
+    expect(program.commands.map((command) => command.name())).toEqual(["init", "capture", "beacon"]);
+    const capture = program.commands.find((command) => command.name() === "capture");
+    const beacon = program.commands.find((command) => command.name() === "beacon");
+    expect(capture?.commands.map((command) => command.name())).toEqual(["record", "annotate"]);
+    expect(beacon?.commands.map((command) => command.name())).toEqual(["inspect"]);
+    expect([...program.commands, ...(capture?.commands ?? []), ...(beacon?.commands ?? [])]
+      .flatMap((command) => command.aliases())).toEqual([]);
+  });
+});
+
+describe("program construction", () => {
+  it("requires ordinary composed commands and exposes no command replacement hook", () => {
+    const source = readFileSync(path.join(repoRoot, "src/cli/program.ts"), "utf8");
+    const entry = readFileSync(path.join(repoRoot, "src/cli/index.ts"), "utf8");
+
+    expect(createProgram.length).toBe(1);
+    expect(source).toContain("const commands = createUnregisteredCommandSet({ writers, setExitCode });");
+    expect(source).not.toContain("createCommandSet");
+    expect(source.match(/createUnregisteredCommandSet\(/g)).toHaveLength(1);
+    expect(entry).not.toMatch(/fake|test.*command|command.*test/i);
   });
 });
 
 describe("runCli unknown command handling", () => {
-  it("rejects 'beacon' as an unknown command with exit status 2", async () => {
+  it("rejects an unknown command with exit status 2", async () => {
     const { outLines, errLines, writeOut, writeErr } = makeWriters();
 
-    const status = await runCli(["node", "pharos", "beacon"], {
+    const status = await runCli(["node", "pharos", "unknown"], {
       version: "1.0.0",
       writeOut,
       writeErr,
@@ -124,7 +159,7 @@ describe("runCli unknown command handling", () => {
 
     expect(status).toBe(2);
     expect(outLines).toEqual([]);
-    expect(errLines.join("")).toContain("unknown command 'beacon'");
+    expect(errLines.join("")).toContain("unknown command 'unknown'");
   });
 });
 
@@ -145,7 +180,7 @@ describe("runCli usage-error normalization", () => {
   it("rejects excess operands with exit status 2", async () => {
     const { errLines, writeOut, writeErr } = makeWriters();
 
-    const status = await runCli(["node", "pharos", "beacon", "extra"], {
+    const status = await runCli(["node", "pharos", "capture", "record", "extra"], {
       version: "1.0.0",
       writeOut,
       writeErr,

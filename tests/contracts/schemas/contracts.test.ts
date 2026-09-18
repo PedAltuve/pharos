@@ -3,6 +3,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { project } from "../../../src/domain/semantics/index.js";
 import type { SemanticSource } from "../../../src/domain/semantics/index.js";
+import { jsonEnvelope } from "../../../src/cli/envelope.js";
 
 const schemaUrl = (name: string) => new URL(`../../../src/contracts/schemas/${name}.schema.json`, import.meta.url);
 
@@ -91,7 +92,8 @@ describe("v1 JSON Schema 2020-12 ingress contracts", () => {
     expect(annotation(action({ kind: "variable", variable: 123 }))).toBe(false);
     expect(annotation(action({ kind: "variable", variable: "checkoutToken", extra: true }))).toBe(false);
     expect(annotation(action({ kind: "variable", variable: "checkoutToken" }))).toBe(true);
-    expect(annotation(action({ kind: "ordinary", nested: { kind: "variable" } }))).toBe(true);
+    expect(annotation(action({ kind: "literal", value: { ordinary: { kind: "variable" } } }))).toBe(true);
+    expect(annotation(action({ kind: "ordinary", nested: { kind: "variable" } }))).toBe(false);
   });
 
   it("accepts structural tokens while leaving selector and Playwright semantics to policy", async () => {
@@ -134,6 +136,33 @@ describe("v1 JSON Schema 2020-12 ingress contracts", () => {
       ...validAnnotation,
       variables: [{ name: "checkoutToken", classification: "required_scenario", constraints: [], secret_reference_id: "env:CHECKOUT_TOKEN", non_sensitive_example: "literal-secret-placeholder" }],
     })).toBe(false);
+  });
+
+  it("aligns the CLI-envelope structure with public producer vocabulary", async () => {
+    const envelope = await validator("cli-envelope");
+    const base = {
+      contract: "pharos.cli-envelope/1", command: "capture.annotate", outcome: "refused", data: {},
+      errors: [{ rule: "invalid-contract", category: "validation", field: "" }], next_action: null,
+    };
+    expect(envelope(base)).toBe(true);
+    expect(envelope({ ...base, errors: [{ rule: "invalid-contract", category: "unknown", field: "/" }] })).toBe(false);
+    expect(envelope({ ...base, errors: [{ rule: "raw exception text", category: "validation", field: "/" }] })).toBe(false);
+    expect(envelope({ ...base, errors: [{ rule: "invalid-contract", category: "validation", field: "/entry_point~1path/~0value" }] })).toBe(true);
+    expect(envelope({ ...base, errors: [{ rule: "invalid-contract", category: "validation", field: "/bad~2escape" }] })).toBe(false);
+    expect(envelope({ ...base, errors: [{ rule: "invalid-contract", category: "validation", field: null }] })).toBe(false);
+    expect(envelope({ ...base, command: "c".repeat(256) })).toBe(true);
+    expect(envelope({ ...base, command: "c".repeat(257) })).toBe(false);
+    expect(envelope({ ...base, next_action: { command: "a".repeat(1024), reason: "r".repeat(1024) } })).toBe(true);
+    expect(envelope({ ...base, next_action: { command: "a".repeat(1025), reason: "ok" } })).toBe(false);
+  });
+
+  it("accepts every representative normalized runtime envelope as a schema-valid safe subset", async () => {
+    const envelope = await validator("cli-envelope");
+    for (const value of [
+      { command: "init", outcome: "succeeded", data: {}, errors: [], nextAction: null },
+      { command: "unsafe /private/path", outcome: "bad", data: {}, errors: [], nextAction: null },
+      { command: "init", outcome: "refused", data: {}, errors: [{ rule: "raw exception", category: "validation", field: "/" }], nextAction: null },
+    ]) expect(envelope(JSON.parse(jsonEnvelope(value as never)))).toBe(true);
   });
 
   it("keeps ingress separate from the frozen SemanticSource and SemanticProjection boundary", async () => {

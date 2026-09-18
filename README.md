@@ -1,20 +1,24 @@
 # Pharos
 
-**Human-guided, agent-assisted browser testing.** A developer demonstrates the intended user journey once, approves its meaning as an immutable **Beacon**, and any coding agent can turn it into durable, repeatable Playwright tests — without the authority to redefine what the product is supposed to do.
+**Product vision — human-guided, agent-assisted browser testing.** Pharos is intended to let a developer demonstrate a journey, preserve its approved meaning as an immutable **Beacon**, and let coding agents create durable Playwright tests without authority to redefine product intent.
 
 > Pharos is the lighthouse. A Beacon is the trusted signal.
+>
+> **Current milestone:** the implemented CLI ends at a non-production revision-1 `open` Beacon draft. Approval, generated tests, execution or evidence collection, and verification are product goals, not current capabilities.
 
 ## Why
 
 A coding agent can click through an application and produce a browser test, but it cannot safely decide which observed details express product intent and which are incidental. A journey that succeeds once is not proof of repeatability either. Pharos separates the two things agents conflate:
 
-| Humans own | Agents execute |
+| Humans own in the product vision | Agents would execute in the product vision |
 |---|---|
 | Intent, demonstration, approval | Test specification and generation |
 | What must remain true | Controlled, repeatable verification |
 | Reviewing meaningful changes | Failure diagnosis and classification |
 
 ## How it works
+
+The intended product workflow is:
 
 ```text
 Record journey → annotate intent → approve Beacon (immutable version)
@@ -23,29 +27,43 @@ Record journey → annotate intent → approve Beacon (immutable version)
 → 1 targeted pass + 3 stability passes = verified
 ```
 
-Core rules:
+That workflow is a product target, not a claim about the current CLI. The implemented guided milestone stops after recording a supporting capture, annotating it into one `open` draft, and inspecting the associated authority-labeled records.
 
-- Approved Beacons are human-owned and never updated silently.
-- Exploration is not verification — only repeatable tests with explicit assertions prove behavior.
-- Agents modify designated test artifacts only, never application code.
+Product design rules include:
+
+- Approved Beacons would be human-owned and never updated silently.
+- Exploration would not constitute verification; repeatable tests with explicit assertions would be required.
+- Agents would modify designated test artifacts only, never application code.
 - No loop-until-green: bounded classification and at most one repair.
 
 ## Status
 
-**Early development — not usable yet.** The domain is fully specified and the workspace foundation is in place; the implementation is being built change by change.
+**Guided open-draft journey available for non-production projects.** Pharos can initialize a local project context, record a supporting capture, annotate that promoted capture, and inspect the resulting revision-1 `open` Beacon draft. The capture is supporting and non-authoritative; only the annotated Beacon semantics are authoritative.
 
 | Milestone | State |
 |---|---|
 | Product, domain, and lifecycle specifications | ✅ Done ([docs/](docs/)) |
 | Technical design | ✅ Done ([docs/technical-design-v1.md](docs/technical-design-v1.md)) |
 | Toolchain + hexagonal skeleton | ✅ Done |
-| Semantic projection and hashing (domain core) | 🔜 Next |
-| Root `pharos` executable (`--help` / `--version` only) | ✅ Done |
-| Beacon/evidence stores, verification engine, product commands, Playwright adapter | Planned |
+| Guided non-production open-draft CLI journey | ✅ Done |
+| Approval/readiness, generated tests, execution/evidence, and verification claims | Explicitly excluded |
 
 ## Command line
 
-The `pharos` executable exists and runs. `--help` and `--version` are its **complete** surface — no product workflow or subcommand is available yet, and any other command exits with status 2.
+The supported public journey is exactly:
+
+```text
+pharos init
+pharos capture record
+pharos capture annotate <capture-id>
+pharos beacon inspect <beacon-id>
+```
+
+`init` accepts only non-production project contexts and stores Pharos-owned context, capture, association, and Beacon data under the selected Pharos home. It does not mutate the target repository. Promoted supporting capture artifacts are retained; this milestone provides no automatic retention cleanup.
+
+`capture record` requires an explicit secret declaration before recording: use one or more `--secret-source env:NAME` values or explicitly pass `--no-secret-sources`. Real recording is interactive: it requires a TTY plus the separately installed Playwright browser prerequisite. The default test suite is hermetic and does not launch a browser, contact a target, or run the opt-in Playwright contract probe.
+
+Use non-interactive JSON input for initialization and annotation. A promoted capture alone creates no Beacon; annotation creates one revision-1 `open` draft, which `beacon inspect` returns together with its supporting/non-authoritative capture association.
 
 Packaging never triggers a build, so build explicitly before packing or installing locally:
 
@@ -69,7 +87,7 @@ npm install --ignore-scripts ./pharos-0.0.0.tgz
 npx pharos --version
 ```
 
-Beacon approval, evidence storage, verification, and browser automation are not reachable from the CLI.
+This CLI does not provide approval or readiness decisions, generated tests, execution or evidence collection, or verification claims.
 
 ## Development
 

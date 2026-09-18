@@ -1,5 +1,10 @@
 import { createRequire } from "node:module";
 import { Command, CommanderError } from "commander";
+import {
+  createUnregisteredCommandSet,
+  registerGuidedJourney,
+  type UnregisteredCommandSet,
+} from "./composition.js";
 
 export interface CliWriters {
   readonly writeOut: (text: string) => void;
@@ -8,6 +13,8 @@ export interface CliWriters {
 
 export interface ProgramOptions extends Partial<CliWriters> {
   readonly version?: string;
+  /** Receives stable product outcomes without mutating process-global state. */
+  readonly setExitCode?: (code: number) => void;
 }
 
 const require = createRequire(import.meta.url);
@@ -45,7 +52,11 @@ export function loadPackageVersion(): string {
   return version;
 }
 
-export function createProgram(options: ProgramOptions = {}): Command {
+/** Registers an already-composed command set; it does not select dependencies. */
+export function createProgram(
+  commands: UnregisteredCommandSet,
+  options: ProgramOptions = {},
+): Command {
   const writeOut = options.writeOut ?? defaultWriteOut;
   const writeErr = options.writeErr ?? defaultWriteErr;
   const version = options.version ?? loadPackageVersion();
@@ -53,7 +64,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   const program = new Command();
   program
     .name("pharos")
-    .description("Pharos command-line interface (bootstrap surface).")
+    .description("Pharos guided journey command-line interface.")
     .usage("[options]")
     .version(version)
     .configureOutput({
@@ -71,8 +82,18 @@ export function createProgram(options: ProgramOptions = {}): Command {
         });
         return;
       }
-      writeOut(command.helpInformation());
-    });
+      command.outputHelp();
+    })
+    .addHelpText("after", [
+      "",
+      "Supported guided journey:",
+      "  pharos init",
+      "  pharos capture record",
+      "  pharos capture annotate <capture-id>",
+      "  pharos beacon inspect <beacon-id>",
+      "",
+    ].join("\n"));
+  registerGuidedJourney(program, commands);
 
   return program;
 }
@@ -81,11 +102,25 @@ export async function runCli(
   argv: readonly string[],
   options: ProgramOptions = {},
 ): Promise<number> {
-  const program = createProgram(options);
+  let productExitCode = 0;
+  const writers = {
+    writeOut: options.writeOut ?? defaultWriteOut,
+    writeErr: options.writeErr ?? defaultWriteErr,
+  };
+  const setExitCode = (code: number) => {
+    productExitCode = code;
+    options.setExitCode?.(code);
+  };
+  const commands = createUnregisteredCommandSet({ writers, setExitCode });
+  const program = createProgram(commands, {
+    version: options.version,
+    ...writers,
+    setExitCode,
+  });
 
   try {
     await program.parseAsync(argv as string[]);
-    return 0;
+    return productExitCode;
   } catch (error) {
     if (error instanceof CommanderError) {
       return SUCCESS_COMMANDER_CODES.has(error.code) ? 0 : 2;

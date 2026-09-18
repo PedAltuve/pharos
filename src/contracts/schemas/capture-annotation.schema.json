@@ -35,7 +35,7 @@
     "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
     "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
     "jsonValue": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "null" }, { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } }, { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } }] },
-    "actionValue": { "anyOf": [{ "type": "null" }, { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] }, { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } }, { "type": "object", "not": { "properties": { "kind": { "const": "variable" } }, "required": ["kind"] }, "additionalProperties": { "$ref": "#/$defs/jsonValue" } }, { "type": "object", "additionalProperties": false, "required": ["kind", "variable"], "properties": { "kind": { "const": "variable" }, "variable": { "$ref": "#/$defs/token" } } }] },
+    "actionValue": { "oneOf": [{ "type": "null" }, { "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } }, { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "$ref": "#/$defs/jsonValue" } } }, { "type": "object", "additionalProperties": false, "required": ["kind", "variable"], "properties": { "kind": { "const": "variable" }, "variable": { "$ref": "#/$defs/token" } } }] },
     "action": {
       "type": "object", "additionalProperties": false, "required": ["action", "target", "value"],
       "properties": {
