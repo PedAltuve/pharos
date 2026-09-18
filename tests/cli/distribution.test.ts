@@ -56,20 +56,35 @@ describe("built and packaged distribution", () => {
     expect(contents.startsWith(SHEBANG)).toBe(true);
   });
 
-  it("runs the built entry for --help, --version, and beacon", async () => {
+  it("runs the built entry for help, version, guided grammar, and safe pre-recorder refusals", async () => {
     const manifest = await readRepoManifest();
 
     const help = await run("node", [BUILT_ENTRY, "--help"], repoRoot);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("pharos");
+    expect(help.stdout).toContain("pharos init");
+    expect(help.stdout).toContain("pharos capture record");
+    expect(help.stdout).toContain("pharos capture annotate <capture-id>");
+    expect(help.stdout).toContain("pharos beacon inspect <beacon-id>");
 
     const version = await run("node", [BUILT_ENTRY, "--version"], repoRoot);
     expect(version.status).toBe(0);
     expect(version.stdout).toBe(`${manifest.version as string}\n`);
 
-    const beacon = await run("node", [BUILT_ENTRY, "beacon"], repoRoot);
-    expect(beacon.status).toBe(2);
-    expect(beacon.stderr).toContain("unknown command 'beacon'");
+    const unknown = await run("node", [BUILT_ENTRY, "unknown"], repoRoot);
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toContain("unknown command 'unknown'");
+
+    const incomplete = await run("node", [BUILT_ENTRY, "beacon"], repoRoot);
+    expect(incomplete.status).toBe(2);
+
+    const recorderRefusal = await run("node", [BUILT_ENTRY, "capture", "record", "--non-interactive", "--format", "json", "--no-secret-sources"], repoRoot);
+    expect(recorderRefusal.status).toBe(3);
+    expect(JSON.parse(recorderRefusal.stdout)).toMatchObject({
+      command: "capture.record",
+      outcome: "refused",
+      errors: [{ rule: "record-requires-interactive-terminal" }],
+    });
   });
 
   it("declares the exact publishable manifest contract", async () => {
