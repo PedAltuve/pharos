@@ -8,7 +8,12 @@ export type CaptureId = `cap_${string}`;
 export type BeaconId = `bcn_${string}`;
 export type RequestId = `req_${string}`;
 export type CaptureStatus = "pending" | "launching" | "recording" | "post_exit" | "resolving" | "promoted" | "rejected" | "failed" | "interrupted";
+export type TerminalCaptureStatus = Extract<CaptureStatus, "promoted" | "rejected" | "failed" | "interrupted">;
 export type CaptureResolution = "promote" | "reject" | "fail" | "interrupt";
+
+export function isTerminalCaptureStatus(status: unknown): status is TerminalCaptureStatus {
+  return status === "promoted" || status === "rejected" || status === "failed" || status === "interrupted";
+}
 
 export interface CaptureSessionCommon {
   readonly contract: typeof CAPTURE_SESSION_CONTRACT;

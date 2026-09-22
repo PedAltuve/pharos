@@ -655,6 +655,41 @@ describe("FsCaptureStore v2 lifecycle", () => {
       { ok: true, value: { status: "resolving" } },
     );
   });
+  it("refuses a staging pathname replacement after linking the validated artifact", async () => {
+    const stagedPath = join(root, "capture-staging", captureId, "recording.spec.ts");
+    const outside = join(root, "outside-replacement.spec.ts");
+    const bytes = "validated artifact";
+    const store = new FsCaptureStore({
+      projectRoot: root,
+      observer: {
+        async onStage(stage) {
+          if (stage === "promoted-materialized") {
+            await writeFile(outside, "replacement");
+            await rm(stagedPath);
+            await symlink(outside, stagedPath);
+          }
+        },
+      },
+    });
+    await postExit(store);
+    const material = await staged(bytes);
+
+    await expect(
+      store.resolve(
+        projectId,
+        captureId,
+        { resolution: "promote", artifact: material.artifact },
+        time,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { rule: "capture-store-corruption", captureId },
+    });
+    await expect(lstat(join(root, "captures", captureId, "recording.spec.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(store.getSession(projectId, captureId)).resolves.toMatchObject(
+      { ok: true, value: { status: "resolving" } },
+    );
+  });
   it.each([
     ["promote", "not-a-time"],
     ["promote", "2026-03-01T00:03:00Z"],

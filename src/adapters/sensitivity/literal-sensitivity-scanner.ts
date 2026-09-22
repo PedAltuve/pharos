@@ -1,8 +1,4 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
-import { join } from "node:path";
-import type { CaptureId } from "../../domain/capture/index.js";
+import { stagedRecordingPath, withHandleBoundRegularFile } from "../capture-layout/index.js";
 import type { SensitivityScanner } from "../../domain/ports/sensitivity-scanner.js";
 import { err, ok } from "../../shared/result.js";
 
@@ -47,42 +43,23 @@ export class LiteralSensitivityScanner implements SensitivityScanner {
       return err({ category: "incomplete" as const, count: 0 });
     }
 
-    const path = join(this.options.projectRoot, "capture-staging", command.captureId, RECORDING);
-    const bytes = await this.readRegularFile(path);
-    if (bytes === null) return err({ rule: "unsafe-artifact" as const });
+    const contents = await withHandleBoundRegularFile(
+      stagedRecordingPath(this.options.projectRoot, command.captureId),
+      async (file) => {
+        await this.options.beforeOpen?.();
+        return await file.readContents();
+      },
+    );
+    if (contents === null) return err({ rule: "unsafe-artifact" as const });
 
-    const text = bytes.toString("utf8");
+    const text = contents.bytes.toString("utf8");
     const count = values.reduce((total, value) => total + Number(representations(value).some((candidate) => text.includes(candidate))), 0);
     if (count > 0) return err({ category: "detected" as const, count });
 
     return ok({
       reference: `captures/${command.captureId}/${RECORDING}`,
-      byteSize: bytes.byteLength,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
+      byteSize: contents.byteSize,
+      sha256: contents.sha256,
     });
   }
-
-  private async readRegularFile(path: string): Promise<Buffer | null> {
-    try {
-      const before = await lstat(path);
-      if (!before.isFile() || before.isSymbolicLink()) return null;
-      await this.options.beforeOpen?.();
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        const opened = await handle.stat();
-        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return null;
-        const bytes = await handle.readFile();
-        const after = await handle.stat();
-        return after.size === opened.size && after.mtimeMs === opened.mtimeMs ? bytes : null;
-      } finally {
-        await handle.close();
-      }
-    } catch {
-      return null;
-    }
-  }
-}
-
-export function stagedRecordingPath(projectRoot: string, captureId: CaptureId): string {
-  return join(projectRoot, "capture-staging", captureId, RECORDING);
 }

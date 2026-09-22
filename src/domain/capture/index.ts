@@ -2,6 +2,7 @@ export { annotationEligibility, isCaptureId } from "./eligibility.js";
 export {
   CAPTURE_ASSOCIATION_CONTRACT,
   CAPTURE_SESSION_CONTRACT,
+  isTerminalCaptureStatus,
   type AnnotationEligibility,
   type BeaconId,
   type CaptureAssociationConflict,
@@ -17,6 +18,7 @@ export {
   type CaptureResolution,
   type CaptureSession,
   type CaptureStatus,
+  type TerminalCaptureStatus,
   type FailedCaptureSession,
   type InterruptedCaptureSession,
   type PostExitCaptureSession,

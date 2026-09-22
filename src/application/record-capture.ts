@@ -1,3 +1,4 @@
+import { isTerminalCaptureStatus } from "../domain/capture/index.js";
 import type { CaptureId, CaptureRefusal, CaptureSession, RequestId } from "../domain/capture/index.js";
 import type { ProjectId } from "../domain/project/index.js";
 import type {
@@ -161,7 +162,7 @@ export class RecordCapture {
     session: CaptureSession,
     resolvedSecrets: ReadonlyMap<string, string>,
   ): Promise<Result<RecordedCapture, RecordCaptureRefusal>> {
-    if (session.status === "promoted" || session.status === "rejected" || session.status === "failed" || session.status === "interrupted") {
+    if (isTerminalCaptureStatus(session.status)) {
       return terminalResult(session);
     }
     if (session.status === "resolving") {
