@@ -3,6 +3,7 @@ import {
   CAPTURE_SESSION_CONTRACT,
   annotationEligibility,
   isCaptureId,
+  isTerminalCaptureStatus,
 } from "../../../src/domain/capture/index.js";
 import type {
   BeaconId,
@@ -57,6 +58,20 @@ describe("CaptureSession v2 annotation eligibility", () => {
       ok: false,
       error: { rule: "capture-not-promoted", captureId, status: session.status },
     });
+  });
+
+  it.each([
+    ["pending", false],
+    ["launching", false],
+    ["recording", false],
+    ["post_exit", false],
+    ["resolving", false],
+    ["promoted", true],
+    ["rejected", true],
+    ["failed", true],
+    ["interrupted", true],
+  ] as const)("classifies %s terminality", (status, expected) => {
+    expect(isTerminalCaptureStatus(status)).toBe(expected);
   });
 
   it("exports the capture refusal types and brands beacon association lookup IDs", () => {

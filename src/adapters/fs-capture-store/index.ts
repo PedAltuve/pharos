@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import { link, lstat, open, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -11,22 +10,22 @@ import type {
   CaptureSession,
   PromotedCaptureArtifact,
   RequestId,
+  TerminalCaptureStatus,
 } from "../../domain/capture/index.js";
 import type { CaptureSessionCommon, RecorderProcessEvidence } from "../../domain/capture/types.js";
 import type { ProjectId } from "../../domain/project/index.js";
-import { CAPTURE_SESSION_CONTRACT, isCaptureId } from "../../domain/capture/index.js";
+import { CAPTURE_SESSION_CONTRACT, isCaptureId, isTerminalCaptureStatus } from "../../domain/capture/index.js";
 import { isProjectId } from "../../domain/project/index.js";
 import type { BeginCaptureCommand, BeginLaunchRefusal, CaptureResolutionDecision, CaptureStore } from "../../domain/ports/capture-store.js";
 import { err, ok, type Result } from "../../shared/result.js";
+import { captureStageDirectory, stagedRecordingPath, withHandleBoundRegularFile } from "../capture-layout/index.js";
 import { ensurePrivateDirectory, isErrno, readJson, writePrivateJson } from "../fs-project/filesystem.js";
 import { ProjectLock } from "../fs-project/project-lock.js";
 
-const STAGED_RECORDING = "recording.spec.ts";
 const PROMOTED_RECORDING = "recording.spec.ts";
 const SHA256 = /^[a-f0-9]{64}$/;
 const LEGACY_CAPTURE_SESSION_CONTRACT = "pharos.capture-session/1";
 
-type TerminalCaptureStatus = "promoted" | "rejected" | "failed" | "interrupted";
 type StoredRequest = BeginCaptureCommand & {
   readonly completion?: { readonly status: TerminalCaptureStatus; readonly captureId: CaptureId };
 };
@@ -63,6 +62,7 @@ function requestHash(requestId: RequestId): string {
   return createHash("sha256").update(requestId).digest("hex");
 }
 
+/** Generated capture identity and creation time belong to the initial plan, not replay identity. */
 function sameRequest(left: StoredRequest, right: BeginCaptureCommand): boolean {
   return left.projectId === right.projectId
     && left.requestId === right.requestId
@@ -70,7 +70,6 @@ function sameRequest(left: StoredRequest, right: BeginCaptureCommand): boolean {
     && sameSecretReferences(left.secretSourceReferences, right.secretSourceReferences);
 }
 
-/** Generated capture identity and creation time belong to the initial plan, not replay identity. */
 function sameSecretReferences(left: readonly string[], right: readonly string[]): boolean {
   const sortedLeft = [...left].sort();
   const sortedRight = [...right].sort();
@@ -117,10 +116,6 @@ function isSafeSecretReferences(value: unknown): value is readonly string[] {
   return new Set(references).size === references.length;
 }
 
-function isTerminalStatus(value: unknown): value is TerminalCaptureStatus {
-  return value === "promoted" || value === "rejected" || value === "failed" || value === "interrupted";
-}
-
 function isRecorderProcessEvidence(value: unknown): value is RecorderProcessEvidence {
   return isRecord(value)
     && hasOnlyKeys(value, ["pid", "identity"])
@@ -160,7 +155,7 @@ function requestFrom(value: unknown, expectedCaptureId?: CaptureId, requestId?: 
   if (value.completion === undefined) return request;
   if (!isRecord(value.completion)
     || !hasOnlyKeys(value.completion, ["status", "captureId"])
-    || !isTerminalStatus(value.completion.status)
+    || !isTerminalCaptureStatus(value.completion.status)
     || value.completion.captureId !== value.captureId) return undefined;
   return { ...request, completion: { status: value.completion.status, captureId: value.captureId } };
 }
@@ -397,7 +392,7 @@ export class FsCaptureStore implements CaptureStore {
     const requested = requestFrom(command, command.captureId, command.requestId);
     if (requested === undefined) return captureRefusal(command.captureId);
     const requestPath = this.requestPath(command.requestId);
-    const existingRequest = await this.readRequest(requestPath, null, command.requestId);
+    const existingRequest = await this.readRequest(requestPath, null, command.captureId, command.requestId);
     if (!existingRequest.ok) return captureRefusal(command.captureId);
     const plan = existingRequest.value ?? requested;
     let session: CaptureSession;
@@ -419,7 +414,7 @@ export class FsCaptureStore implements CaptureStore {
         const active = await this.activeProjectSession(command.projectId, plan.captureId);
         if (!active.ok) return active;
         if (active.value !== null) return err({ rule: "capture-process-still-active", captureId: active.value.captureId });
-        await ensurePrivateDirectory(this.stageDirectory(plan.captureId));
+        await ensurePrivateDirectory(captureStageDirectory(this.projectRoot, plan.captureId));
         session = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "pending" };
         await this.writeSession(session);
         await this.notify("pending-written", session.captureId);
@@ -429,7 +424,7 @@ export class FsCaptureStore implements CaptureStore {
       if (!active.ok) return active;
       if (active.value !== null) return err({ rule: "capture-process-still-active", captureId: active.value.captureId });
       await writePrivateJson(requestPath, requested);
-      await ensurePrivateDirectory(this.stageDirectory(plan.captureId));
+      await ensurePrivateDirectory(captureStageDirectory(this.projectRoot, plan.captureId));
       session = { ...plan, contract: CAPTURE_SESSION_CONTRACT, status: "pending" };
       await this.writeSession(session);
       await this.notify("pending-written", session.captureId);
@@ -447,7 +442,7 @@ export class FsCaptureStore implements CaptureStore {
       if (captureId === exceptCaptureId) continue;
       const read = await this.getSessionUnlocked(captureId);
       if (!read.ok) return read;
-      if (read.value.projectId === projectId && !isTerminalStatus(read.value.status)) return ok(read.value);
+      if (read.value.projectId === projectId && !isTerminalCaptureStatus(read.value.status)) return ok(read.value);
     }
     return ok(null);
   }
@@ -510,7 +505,7 @@ export class FsCaptureStore implements CaptureStore {
           blocked.push(session);
           continue;
         }
-        if (isTerminalStatus(session.status)) continue;
+        if (isTerminalCaptureStatus(session.status)) continue;
         let finished: Result<CaptureSession, CaptureRefusal>;
         if (session.status === "pending") {
           finished = await this.resolveUnlocked(
@@ -576,7 +571,7 @@ export class FsCaptureStore implements CaptureStore {
   ): Promise<Result<CaptureSession, CaptureRefusal>> {
     const details = detailFor(decision, session.captureId);
     if (!details.ok) return details;
-    if (isTerminalStatus(session.status)) {
+    if (isTerminalCaptureStatus(session.status)) {
       if (!sameResolution(details.value, session)) {
         return err({ rule: "capture-resolution-conflict", captureId: session.captureId });
       }
@@ -625,7 +620,7 @@ export class FsCaptureStore implements CaptureStore {
   }
 
   private async promote(captureId: CaptureId, artifact: PromotedCaptureArtifact): Promise<Result<void, CaptureRefusal>> {
-    const staged = join(this.stageDirectory(captureId), STAGED_RECORDING);
+    const staged = stagedRecordingPath(this.projectRoot, captureId);
     const destination = join(this.captureDirectory(captureId), PROMOTED_RECORDING);
     try {
       await lstat(staged);
@@ -633,62 +628,51 @@ export class FsCaptureStore implements CaptureStore {
       if (!isErrno(error, "ENOENT")) throw error;
       return this.verifyDestination(destination, artifact, captureId);
     }
-    const stageInfo = await this.regularFile(staged, captureId);
-    if (!stageInfo.ok) return stageInfo;
-    const digest = await this.digest(staged);
-    if (digest.sha256 !== artifact.sha256 || digest.byteSize !== artifact.byteSize) return captureRefusal(captureId);
-    let linked = false;
-    try {
-      await link(staged, destination);
-      linked = true;
-      await this.notify("promoted-materialized", captureId);
-    } catch (error) {
-      if (!isErrno(error, "EEXIST")) throw error;
-    }
-    const verified = await this.verifyDestination(destination, artifact, captureId);
-    if (!verified.ok) {
-      if (linked) await unlink(destination);
-      return verified;
-    }
-    await this.removeStage(captureId);
-    return ok(undefined);
+
+    const promoted = await withHandleBoundRegularFile(staged, async (source) => {
+      const contents = await source.readContents();
+      if (contents === null || contents.sha256 !== artifact.sha256 || contents.byteSize !== artifact.byteSize) {
+        return captureRefusal(captureId);
+      }
+      if (!await source.matchesPath()) return captureRefusal(captureId);
+
+      let linked = false;
+      try {
+        await link(staged, destination);
+        linked = true;
+        await this.notify("promoted-materialized", captureId);
+      } catch (error) {
+        if (!isErrno(error, "EEXIST")) throw error;
+      }
+      const verified = await this.verifyDestination(destination, artifact, captureId);
+      if (!verified.ok || !await source.matchesPath()) {
+        if (linked) await unlink(destination);
+        return verified.ok ? captureRefusal(captureId) : verified;
+      }
+      await this.removeStage(captureId);
+      return ok(undefined);
+    });
+    return promoted ?? captureRefusal(captureId);
   }
 
   private async verifyDestination(destination: string, artifact: PromotedCaptureArtifact, captureId: CaptureId): Promise<Result<void, CaptureRefusal>> {
-    const existing = await this.regularFile(destination, captureId);
-    if (!existing.ok) return existing;
-    const existingDigest = await this.digest(destination);
-    return existingDigest.sha256 === artifact.sha256 && existingDigest.byteSize === artifact.byteSize
-      ? ok(undefined)
-      : captureRefusal(captureId);
+    const verified = await withHandleBoundRegularFile(destination, async (file) => {
+      const contents = await file.readContents();
+      return contents !== null && contents.sha256 === artifact.sha256 && contents.byteSize === artifact.byteSize
+        ? ok(undefined)
+        : captureRefusal(captureId);
+    });
+    return verified ?? captureRefusal(captureId);
   }
 
   private async removeStage(captureId: CaptureId): Promise<void> {
-    const path = join(this.stageDirectory(captureId), STAGED_RECORDING);
+    const path = stagedRecordingPath(this.projectRoot, captureId);
     try {
       await unlink(path);
       await this.notify("stage-unlinked", captureId);
     } catch (error) { if (!isErrno(error, "ENOENT")) throw error; }
-    const directory = await open(this.stageDirectory(captureId), "r");
+    const directory = await open(captureStageDirectory(this.projectRoot, captureId), "r");
     try { await directory.sync(); } finally { await directory.close(); }
-  }
-
-  private async regularFile(path: string, captureId: CaptureId): Promise<Result<void, CaptureRefusal>> {
-    try {
-      const stat = await lstat(path);
-      if (stat.isSymbolicLink() || !stat.isFile()) return captureRefusal(captureId);
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { if (!(await handle.stat()).isFile()) return captureRefusal(captureId); } finally { await handle.close(); }
-      return ok(undefined);
-    } catch { return captureRefusal(captureId); }
-  }
-
-  private async digest(path: string): Promise<{ sha256: string; byteSize: number }> {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const bytes = await handle.readFile();
-      return { sha256: createHash("sha256").update(bytes).digest("hex"), byteSize: bytes.byteLength };
-    } finally { await handle.close(); }
   }
 
   private async withLease<T>(operation: () => Promise<T>): Promise<T> {
@@ -721,7 +705,6 @@ export class FsCaptureStore implements CaptureStore {
 
   private requestPath(requestId: RequestId): string { return join(this.projectRoot, "capture-journal", "requests", `${requestHash(requestId)}.json`); }
   private captureDirectory(captureId: CaptureId): string { return join(this.projectRoot, "captures", captureId); }
-  private stageDirectory(captureId: CaptureId): string { return join(this.projectRoot, "capture-staging", captureId); }
   private sessionPath(captureId: CaptureId): string { return join(this.captureDirectory(captureId), "session.json"); }
   private captureAssociationPath(captureId: CaptureId): string { return join(this.projectRoot, "capture-associations", "by-capture", `${captureId}.json`); }
   private beaconAssociationPath(beaconId: BeaconId): string { return join(this.projectRoot, "capture-associations", "by-beacon", `${beaconId}.json`); }
@@ -739,8 +722,12 @@ export class FsCaptureStore implements CaptureStore {
     catch (error) { return isErrno(error, "ENOENT") ? err({ rule: "capture-not-found", captureId }) : captureRefusal(captureId); }
   }
 
-  private async readRequest(path: string, expectedCaptureId: CaptureId | null, requestId: RequestId): Promise<Result<StoredRequest | null, CaptureRefusal>> {
-    const refusalCaptureId = expectedCaptureId ?? "cap_invalid" as CaptureId;
+  private async readRequest(
+    path: string,
+    expectedCaptureId: CaptureId | null,
+    refusalCaptureId: CaptureId,
+    requestId: RequestId,
+  ): Promise<Result<StoredRequest | null, CaptureRefusal>> {
     try {
       const parsed = requestFrom(await readJson(path), expectedCaptureId ?? undefined, requestId);
       return parsed === undefined ? captureRefusal(refusalCaptureId) : ok(parsed);
@@ -751,8 +738,8 @@ export class FsCaptureStore implements CaptureStore {
 
   private async writeRequestCompletion(session: CaptureSession): Promise<Result<void, CaptureRefusal>> {
     const path = this.requestPath(session.requestId);
-    const request = await this.readRequest(path, session.captureId, session.requestId);
-    if (!request.ok || request.value === null || !isTerminalStatus(session.status)) return captureRefusal(session.captureId);
+    const request = await this.readRequest(path, session.captureId, session.captureId, session.requestId);
+    if (!request.ok || request.value === null || !isTerminalCaptureStatus(session.status)) return captureRefusal(session.captureId);
     if (request.value.completion !== undefined && request.value.completion.status !== session.status) return captureRefusal(session.captureId);
     await writePrivateJson(path, { ...request.value, completion: { status: session.status, captureId: session.captureId } });
     await this.notify("journal-completed", session.captureId);

@@ -3,12 +3,12 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { stagedRecordingPath } from "../capture-layout/index.js";
 import type { Recorder, RecordCaptureCommand, RecorderResult, RecorderRun } from "../../domain/ports/recorder.js";
 import type { RecorderProcessEvidence } from "../../domain/capture/types.js";
 import { ProcessIdentityAdapter, RECORDER_OWNERSHIP_MARKER, type ProcessIdentityObservation, type ProcessProbe } from "./process-identity.js";
 
 const require = createRequire(import.meta.url);
-const RECORDING = "recording.spec.ts";
 
 type RecorderStdio = "inherit" | ["inherit", "ignore", "inherit"];
 type RecorderSignal = "SIGINT" | "SIGTERM" | "SIGKILL";
@@ -263,7 +263,7 @@ export class PlaywrightRecorder implements Recorder {
         return new FinalizedRecorderRun({ kind: "prerequisite-or-process-failure" });
       }
       const child = this.spawn(process.execPath, [
-        cli, "codegen", "--browser", "chromium", "--output", this.stagedRecording(command.captureId), command.url,
+        cli, "codegen", "--browser", "chromium", "--output", stagedRecordingPath(this.options.projectRoot, command.captureId), command.url,
       ], {
         shell: false,
         stdio: command.terminalMode === "human" ? "inherit" : ["inherit", "ignore", "inherit"],
@@ -290,9 +290,5 @@ export class PlaywrightRecorder implements Recorder {
 
   async record(command: RecordCaptureCommand): Promise<RecorderResult> {
     return await (await this.start(command)).waitForCompletion();
-  }
-
-  private stagedRecording(captureId: string): string {
-    return resolve(this.options.projectRoot, "capture-staging", captureId, RECORDING);
   }
 }
