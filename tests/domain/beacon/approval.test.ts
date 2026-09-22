@@ -113,6 +113,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_missing",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -135,6 +136,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -161,6 +163,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -183,6 +186,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -218,6 +222,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_new",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -253,6 +258,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_new",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -285,6 +291,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_new",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -319,6 +326,7 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_new",
         approvedAt: "2026-01-01T00:00:00.000Z",
         actor: "operator_1",
@@ -332,6 +340,33 @@ describe("approveDraft: admission checks (ADR 6 fixed order)", () => {
     if (!result.ok) {
       expect(result.error.rule).toBe("reviewed-hash-mismatch");
     }
+  });
+});
+
+describe("approveDraft: locked admission preconditions", () => {
+  it("refuses a stale expected revision", () => {
+    const beacon = withOpenDraft(baseBeacon(), "drf_1");
+    const result = approveDraft(beacon, {
+      draftId: "drf_1", expectedRevision: 2, versionId: "ver_1",
+      approvedAt: "2026-02-01T00:00:00.000Z", actor: "operator_1",
+      reviewedHash: stubHasher.hash(project(baseContent())), staleOriginAcknowledged: false,
+    }, stubHasher);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { rule: "stale-draft-revision", draftId: "drf_1", expectedRevision: 2, currentRevision: 1 },
+    });
+  });
+
+  it("refuses approval when another draft remains open", () => {
+    const beacon = withOpenDraft(withOpenDraft(baseBeacon(), "drf_1"), "drf_2");
+    const result = approveDraft(beacon, {
+      draftId: "drf_1", expectedRevision: 1, versionId: "ver_1",
+      approvedAt: "2026-02-01T00:00:00.000Z", actor: "operator_1",
+      reviewedHash: stubHasher.hash(project(baseContent())), staleOriginAcknowledged: false,
+    }, stubHasher);
+
+    expect(result).toEqual({ ok: false, error: { rule: "ambiguous-open-drafts", beaconId: "bcn_1" } });
   });
 });
 
@@ -351,6 +386,7 @@ describe("approveDraft: stale-origin approval with explicit acknowledgment", () 
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_new",
         approvedAt: "2026-02-01T00:00:00.000Z",
         actor: "operator_1",
@@ -382,6 +418,7 @@ describe("approveDraft: first-approval success (no prior active version)", () =>
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-02-01T00:00:00.000Z",
         actor: "operator_1",
@@ -438,6 +475,7 @@ describe("approveDraft: port composition with the real JcsSha256Hasher", () => {
       beacon,
       {
         draftId: "drf_1",
+        expectedRevision: 1,
         versionId: "ver_1",
         approvedAt: "2026-02-01T00:00:00.000Z",
         actor: "operator_1",
@@ -471,6 +509,7 @@ describe("approveDraft: supersession", () => {
       beacon,
       {
         draftId: "drf_2",
+        expectedRevision: 1,
         versionId: "ver_2",
         approvedAt: "2026-03-01T00:00:00.000Z",
         actor: "operator_1",
@@ -512,6 +551,7 @@ describe("approveDraft: supersession", () => {
       beacon,
       {
         draftId: "drf_2",
+        expectedRevision: 1,
         versionId: "ver_2",
         approvedAt: "2026-03-01T00:00:00.000Z",
         actor: "operator_1",
@@ -549,6 +589,7 @@ describe("property 6: hash binding", () => {
             beacon,
             {
               draftId: "drf_1",
+              expectedRevision: 1,
               versionId: "ver_1",
               approvedAt: "2026-02-01T00:00:00.000Z",
               actor: "operator_1",
@@ -618,6 +659,7 @@ function applySequence(steps: readonly SequenceStep[]): Beacon {
         beacon,
         {
           draftId,
+          expectedRevision: 1,
           versionId,
           approvedAt: `2026-04-01T00:00:00.${String(counter).padStart(3, "0")}Z`,
           actor: "operator_1",

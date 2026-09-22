@@ -8,6 +8,7 @@ import type {
   ApproveDraftCommand,
   ForkDraftCommand,
   RevokeVersionCommand,
+  RevokeActiveVersionCommand,
   UpdateDraftCommand,
 } from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
@@ -21,7 +22,8 @@ export type JournalMethod =
   | "updateDraft"
   | "forkDraft"
   | "abandonDraft"
-  | "revokeVersion";
+  | "revokeVersion"
+  | "revokeActiveVersion";
 
 export interface JournalResult {
   readonly beaconId: string;
@@ -49,9 +51,9 @@ export const keyHash = (key: string): string =>
 
 export function approveInput(beaconId: string, c: ApproveDraftCommand): SemanticValue {
   return {
-    method: "approveDraft", beaconId, draftId: c.draftId, versionId: c.versionId,
-    reviewedHash: c.reviewedHash, approvedAt: c.approvedAt, actor: c.actor,
-    staleOriginAcknowledged: c.staleOriginAcknowledged,
+    method: "approveDraft", beaconId, draftId: c.draftId,
+    expectedRevision: c.expectedRevision, reviewedHash: c.reviewedHash,
+    actor: c.actor, staleOriginAcknowledged: c.staleOriginAcknowledged,
   };
 }
 
@@ -100,6 +102,16 @@ export function revokeVersionInput(beaconId: string, c: RevokeVersionCommand): S
   return {
     method: "revokeVersion", beaconId, versionId: c.versionId,
     reason: c.reason, actor: c.actor, revokedAt: c.revokedAt,
+  };
+}
+
+export function revokeActiveVersionInput(
+  beaconId: string,
+  c: RevokeActiveVersionCommand,
+): SemanticValue {
+  return {
+    method: "revokeActiveVersion", beaconId,
+    reason: c.reason.trim(), actor: c.actor,
   };
 }
 

@@ -12,10 +12,22 @@ export interface RevokeVersionCommand {
   readonly revokedAt: string;
 }
 
+export interface RevokeActiveVersionCommand {
+  readonly expectedActiveVersionId: string | null;
+  readonly reason: string;
+  readonly actor: string | null;
+  readonly revokedAt: string;
+}
+
 export function revokeVersion(
   beacon: Beacon,
   cmd: RevokeVersionCommand,
 ): Result<Beacon, BeaconRefusal> {
+  const reason = cmd.reason.trim();
+  if (reason.length === 0) {
+    return err({ rule: "invalid-revocation-reason" });
+  }
+
   const version = getOwn(beacon.versions, cmd.versionId);
   if (version === undefined) {
     return err({ rule: "version-not-found", versionId: cmd.versionId });
@@ -33,7 +45,7 @@ export function revokeVersion(
     previousStatus: version.status,
     revocation: {
       revokedAt: cmd.revokedAt,
-      reason: cmd.reason,
+      reason,
       actor: cmd.actor,
     },
   };

@@ -9,6 +9,7 @@ import type { Version } from "./versions.js";
 
 export interface ApproveDraftCommand {
   readonly draftId: string;
+  readonly expectedRevision: number;
   readonly reviewedHash: string;
   readonly versionId: string;
   readonly approvedAt: string;
@@ -27,6 +28,17 @@ export function approveDraft(
   }
   if (draft.status !== "open") {
     return err({ rule: "draft-not-open", draftId: cmd.draftId, status: draft.status });
+  }
+  if (cmd.expectedRevision !== draft.revision) {
+    return err({
+      rule: "stale-draft-revision",
+      draftId: cmd.draftId,
+      expectedRevision: cmd.expectedRevision,
+      currentRevision: draft.revision,
+    });
+  }
+  if (Object.values(beacon.drafts).filter((candidate) => candidate.status === "open").length !== 1) {
+    return err({ rule: "ambiguous-open-drafts", beaconId: beacon.beaconId });
   }
   if (getOwn(beacon.versions, cmd.versionId) !== undefined) {
     return err({ rule: "duplicate-version-id", versionId: cmd.versionId });
