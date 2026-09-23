@@ -25,6 +25,7 @@ const ids = {
   capture: "cap_018f47de-7a00-7cc0-8000-000000000001",
   beacon: "bcn_018f47de-7a00-7cc0-8000-000000000001",
   draft: "drf_018f47de-7a00-7cc0-8000-000000000001",
+  version: "ver_018f47de-7a00-7cc0-8000-000000000001",
   initRequest: "req_018f47de-7a00-7cc0-8000-000000000001",
   recordRequest: "req_018f47de-7a00-7cc0-8000-000000000002",
   annotateRequest: "req_018f47de-7a00-7cc0-8000-000000000003",
