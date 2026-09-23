@@ -157,6 +157,7 @@ The default suite must remain hermetic: no browser launch, no product-target con
 - 2026-09-22: BL-3's first implementation added the hermetic real-store journey and truthful README; 687 tests and all static/build gates passed. Independent verification still rejected three proof gaps: the semantic-hash assertion was circular, only one version existed so older-version non-reactivation was not exercised, and the help test removed guards for still-excluded later lifecycle commands.
 - 2026-09-22: Final proof corrections added a literal semantic digest oracle, real older-version non-reactivation, and narrowed help guards. Independent complete-candidate verification passed BL-1/BL-2/BL-3 with 688 tests and every static/build gate green.
 - 2026-09-22: Native reliability review found two critical retry short-circuits before store replay. A bounded ~70-line TDD correction closed application approval retry and CLI revocation retry; 689 tests and every static/build gate passed. Native targeted validation then failed with `schema-incompatible`, and fresh status no longer recognized the correction lineage; no native approval is claimed.
+- 2026-09-22: User authorized feature-chain delivery. Created draft tracker PR #78 and child PRs #79–#85 with work-unit commits `f8459b4`, `35b84c9`, `1437c76`, `a03888a`, `e0dea8d`, `2170c2b`, and `a4a57c8`. PR #79 carries the authorized `size:exception`; every PR has exactly one `type:*` label.
 
 ## Verification evidence
 
@@ -187,4 +188,4 @@ The default suite must remain hermetic: no browser launch, no product-target con
 
 ## Next step
 
-Resolve the unavailable native correction validation by starting a fresh review for the corrected candidate (including intended untracked paths), or record review unavailable and follow the risk-gated fallback. Stop before commit/push/PR unless the user explicitly authorizes delivery.
+Delivery is prepared as feature-chain tracker PR #78 with child PRs #79–#85. Review and integrate children in order, then merge tracker #78; do not merge children out of sequence.
