@@ -87,9 +87,9 @@ export interface CliComposition {
 const clock = { now: () => new Date() };
 const noCancellation = { aborted: false, onAbort: () => () => {} };
 
-function generatedId(kind: "project" | "capture" | "beacon" | "draft" | "request"): string {
+function generatedId(kind: "project" | "capture" | "beacon" | "draft" | "version" | "request"): string {
   const uuid = randomUUID().replace(/^(.{14})./, "$17");
-  const prefix = { project: "proj", capture: "cap", beacon: "bcn", draft: "drf", request: "req" }[kind];
+  const prefix = { project: "proj", capture: "cap", beacon: "bcn", draft: "drf", version: "ver", request: "req" }[kind];
   return `${prefix}_${uuid}`;
 }
 
