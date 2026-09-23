@@ -15,11 +15,14 @@ const repoRoot = path.resolve(
 );
 
 const FORBIDDEN_LATER_LIFECYCLE_VOCABULARY = [
-  "approval",
-  "revocation",
   "generation",
   "execution",
+  "run",
   "evidence",
+  "handoff",
+  "task",
+  "readiness",
+  "repair",
   "verification",
 ];
 
@@ -92,6 +95,9 @@ describe("runCli --help and no arguments", () => {
       "pharos capture record",
       "pharos capture annotate <capture-id>",
       "pharos beacon inspect <beacon-id>",
+      "pharos beacon approve <beacon-id>",
+      "pharos beacon revoke <beacon-id>",
+      "pharos status <beacon-id>",
     ]) {
       expect(output).toContain(command);
     }
@@ -117,6 +123,9 @@ describe("runCli --help and no arguments", () => {
     expect(output).toContain("pharos capture record");
     expect(output).toContain("pharos capture annotate <capture-id>");
     expect(output).toContain("pharos beacon inspect <beacon-id>");
+    expect(output).toContain("pharos beacon approve <beacon-id>");
+    expect(output).toContain("pharos beacon revoke <beacon-id>");
+    expect(output).toContain("pharos status <beacon-id>");
   });
 });
 
@@ -124,11 +133,11 @@ describe("createProgram command catalogue", () => {
   it("registers only the complete guided journey without aliases", () => {
     const program = createProgram(createComposedCommands(), { version: "1.0.0" });
 
-    expect(program.commands.map((command) => command.name())).toEqual(["init", "capture", "beacon"]);
+    expect(program.commands.map((command) => command.name())).toEqual(["init", "capture", "beacon", "status"]);
     const capture = program.commands.find((command) => command.name() === "capture");
     const beacon = program.commands.find((command) => command.name() === "beacon");
     expect(capture?.commands.map((command) => command.name())).toEqual(["record", "annotate"]);
-    expect(beacon?.commands.map((command) => command.name())).toEqual(["inspect"]);
+    expect(beacon?.commands.map((command) => command.name())).toEqual(["inspect", "approve", "revoke"]);
     expect([...program.commands, ...(capture?.commands ?? []), ...(beacon?.commands ?? [])]
       .flatMap((command) => command.aliases())).toEqual([]);
   });

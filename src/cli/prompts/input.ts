@@ -80,6 +80,22 @@ export interface InputPrompt<T> {
   prompt(): Promise<T | undefined>;
 }
 
+/** Narrow TTY-only confirmation seam; prompts never carry lifecycle authority. */
+export interface BeaconLifecyclePrompt {
+  confirmApproval(input: {
+    readonly beaconId: string;
+    readonly draftId: string;
+    readonly captureId: string;
+    readonly semanticHash: string;
+  }): Promise<boolean | undefined>;
+  requestRevocationReason(): Promise<string | undefined>;
+  confirmRevocation(input: {
+    readonly beaconId: string;
+    readonly expectedActiveVersionId: string;
+    readonly reason: string;
+  }): Promise<boolean | undefined>;
+}
+
 export type InputCollectionRefusal = InvalidInput | { readonly rule: "prompt-cancelled" };
 
 export interface GuidedInputAdapter {
