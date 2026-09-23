@@ -29,7 +29,7 @@ async function approve(store: FsBeaconStore, draftId: string, versionId: string)
     draftId, label: draftId, beaconTitle: "Beacon", origin, content: source,
   }, `create-${draftId}`)).resolves.toMatchObject({ ok: true });
   await expect(store.approveDraft("bcn_1", {
-    draftId, versionId, reviewedHash: hasher.hash(project(source)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: versionId !== "ver_1",
+    draftId, expectedRevision: 1, versionId, reviewedHash: hasher.hash(project(source)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: versionId !== "ver_1",
   }, `approve-${draftId}`)).resolves.toMatchObject({ ok: true, value: { activeVersionId: versionId } });
 }
 
@@ -94,6 +94,97 @@ describe("FsBeaconStore.revokeVersion", () => {
     });
     expect(await exists(join(projectDir, "beacons", "bcn_1", "active.json"))).toBe(true);
     expect(await readdir(join(projectDir, "beacons", "bcn_1", "versions", "ver_1"))).toContain("revocation.json");
+  });
+});
+
+describe("FsBeaconStore.revokeActiveVersion", () => {
+  it("replays a stable active-only request despite a regenerated timestamp", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await approve(store, "draft_1", "ver_1");
+    const first = await store.revokeActiveVersion("bcn_1", {
+      expectedActiveVersionId: "ver_1", reason: " withdrawn ", actor: "operator", revokedAt: "first",
+    }, "active-revoke-key");
+    const replay = await store.revokeActiveVersion("bcn_1", {
+      expectedActiveVersionId: null, reason: "withdrawn", actor: "operator", revokedAt: "retry",
+    }, "active-revoke-key");
+
+    expect(replay).toEqual(first);
+    expect(first).toMatchObject({
+      ok: true,
+      value: {
+        activeVersionId: null,
+        versions: {
+          ver_1: {
+            versionId: "ver_1",
+            status: "revoked",
+            revocation: {
+              revokedAt: "first",
+              reason: "withdrawn",
+            },
+          },
+        },
+      },
+    });
+    const canonical = await store.getBeacon("bcn_1");
+    expect(canonical).toMatchObject({
+      ok: true,
+      value: {
+        activeVersionId: null,
+        versions: {
+          ver_1: {
+            versionId: "ver_1",
+            status: "revoked",
+            revocation: {
+              revokedAt: "first",
+              reason: "withdrawn",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("returns a locked no-active refusal only when both snapshots are null", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await expect(store.createDraft("bcn_1", {
+      draftId: "draft_1", label: "Draft", beaconTitle: "Beacon", origin, content: content("draft_1"),
+    }, "create-draft")).resolves.toMatchObject({ ok: true });
+
+    await expect(store.revokeActiveVersion("bcn_1", {
+      expectedActiveVersionId: null, reason: "withdrawn", actor: "operator", revokedAt: "now",
+    }, "fresh-no-active-key")).resolves.toEqual({
+      ok: false,
+      error: { rule: "active-version-not-found", beaconId: "bcn_1" },
+    });
+  });
+
+  it("refuses an expected null snapshot while a version is active", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await approve(store, "draft_1", "ver_1");
+
+    await expect(store.revokeActiveVersion("bcn_1", {
+      expectedActiveVersionId: null, reason: "withdrawn", actor: "operator", revokedAt: "now",
+    }, "fresh-null-current-key")).resolves.toEqual({
+      ok: false,
+      error: {
+        rule: "active-version-mismatch",
+        expectedActiveVersionId: null,
+        currentActiveVersionId: "ver_1",
+      },
+    });
+  });
+
+  it("refuses when a replacement became active before the active-only revoke entered the lock", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await approve(store, "draft_1", "ver_1");
+    await approve(store, "draft_2", "ver_2");
+
+    await expect(store.revokeActiveVersion("bcn_1", {
+      expectedActiveVersionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "now",
+    }, "active-revoke-key")).resolves.toEqual({
+      ok: false,
+      error: { rule: "active-version-mismatch", expectedActiveVersionId: "ver_1", currentActiveVersionId: "ver_2" },
+    });
   });
 });
 

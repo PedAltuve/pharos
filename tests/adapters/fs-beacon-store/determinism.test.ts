@@ -23,9 +23,10 @@ async function lifecycle(path: string): Promise<Beacon> {
   value(await store.updateDraft("bcn_1", { draftId: "draft_1", expectedRevision: 1, content: content("updated") }, "update-1"));
   value(await store.forkDraft("bcn_1", { sourceDraftId: "draft_1", draftId: "draft_2", label: "Fork" }, "fork-1"));
   value(await store.abandonDraft("bcn_1", { draftId: "draft_2", reason: "done", abandonedAt: "2026-01-01T00:00:00.000Z" }, "abandon-1"));
+  value(await store.abandonDraft("bcn_1", { draftId: "draft_1", reason: "approval setup", abandonedAt: "2026-01-01T00:00:01.000Z" }, "abandon-approval-source"));
   const approvalSource = content("approval");
   value(await store.createDraft("bcn_1", create("draft_3", approvalSource), "create-3"));
-  value(await store.approveDraft("bcn_1", { draftId: "draft_3", versionId: "ver_1", reviewedHash: hasher.hash(project(approvalSource)), approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: false }, "approve-1"));
+  value(await store.approveDraft("bcn_1", { draftId: "draft_3", expectedRevision: 1, versionId: "ver_1", reviewedHash: hasher.hash(project(approvalSource)), approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: false }, "approve-1"));
   return value(await store.revokeVersion("bcn_1", { versionId: "ver_1", reason: "done", actor: null, revokedAt: "2026-01-03T00:00:00.000Z" }, "revoke-1"));
 }
 
@@ -50,9 +51,9 @@ describe("FsBeaconStore determinism", () => {
     await expect(store.listBeacons()).resolves.toMatchObject({ ok: true, value: [{ beaconId: "bcn_Z" }, { beaconId: "bcn_a" }] });
     const source = content("root");
     await store.createDraft("bcn_root", create("draft_Z", source), "root-create-Z");
-    await store.approveDraft("bcn_root", { draftId: "draft_Z", versionId: "ver_Z", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-01T00:00:00.000Z", actor: null, staleOriginAcknowledged: false }, "root-approve-Z");
+    await store.approveDraft("bcn_root", { draftId: "draft_Z", expectedRevision: 1, versionId: "ver_Z", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-01T00:00:00.000Z", actor: null, staleOriginAcknowledged: false }, "root-approve-Z");
     await store.createDraft("bcn_root", create("draft_a", source), "root-create-a");
-    await store.approveDraft("bcn_root", { draftId: "draft_a", versionId: "ver_a", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: true }, "root-approve-a");
+    await store.approveDraft("bcn_root", { draftId: "draft_a", expectedRevision: 1, versionId: "ver_a", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: true }, "root-approve-a");
     await store.revokeVersion("bcn_root", { versionId: "ver_Z", reason: "done", actor: null, revokedAt: "2026-01-03T00:00:00.000Z" }, "root-revoke-Z");
     expect(Object.keys((await scanVersions(root, "bcn_root")).versions)).toEqual(["ver_Z", "ver_a"]);
   });

@@ -5,14 +5,20 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   AnnotateCapture,
+  ApproveBeaconDraft,
+  BeaconStatus,
   InitializeProject,
   InspectBeaconDraft,
   RecordCapture,
+  RevokeActiveBeacon,
 } from "../application/index.js";
 import type {
   AnnotateCaptureRequest,
   AnnotateCaptureRefusal,
   AnnotatedCapture,
+  ApproveBeaconDraftRequest,
+  ApproveBeaconDraftRefusal,
+  ApprovedBeaconDraft,
   InitializeProjectRequest,
   InitializedProject,
   InspectBeaconDraftRequest,
@@ -21,6 +27,9 @@ import type {
   RecordCaptureRefusal,
   RecordCaptureRequest,
   RecordedCapture,
+  RevokeActiveBeaconRequest,
+  RevokeActiveBeaconRefusal,
+  RevokedActiveBeacon,
 } from "../application/index.js";
 import { FsBeaconStore } from "../adapters/fs-beacon-store/index.js";
 import { FsCaptureStore } from "../adapters/fs-capture-store/index.js";
@@ -31,13 +40,16 @@ import { PlaywrightRecorder } from "../adapters/playwright/playwright-recorder.j
 import { EnvSecretResolver } from "../adapters/secret-resolution/env-secret-resolver.js";
 import { LiteralSensitivityScanner } from "../adapters/sensitivity/literal-sensitivity-scanner.js";
 import { AjvContractValidator } from "../adapters/validation/ajv-contract-validator.js";
+import { buildBeaconApproveCommand } from "./commands/beacon-approve.js";
 import { buildBeaconInspectCommand } from "./commands/beacon-inspect.js";
+import { buildBeaconRevokeCommand } from "./commands/beacon-revoke.js";
 import { buildCaptureAnnotateCommand } from "./commands/capture-annotate.js";
 import { buildCaptureRecordCommand } from "./commands/capture-record.js";
 import { buildInitCommand } from "./commands/init.js";
+import { buildStatusCommand } from "./commands/status.js";
 import type { CliCommandWriters } from "./commands/shared.js";
-import { captureAnnotationPrompt, projectInitPrompt } from "./prompts/clack.js";
-import { createGuidedInputAdapter, type InputPrompt } from "./prompts/input.js";
+import { beaconLifecyclePrompt, captureAnnotationPrompt, projectInitPrompt } from "./prompts/clack.js";
+import { createGuidedInputAdapter, type BeaconLifecyclePrompt, type InputPrompt } from "./prompts/input.js";
 import type { CancellationSignal, IdGenerator } from "../domain/ports/index.js";
 import type { ProjectContext, ProjectContextRefusal, ProjectId } from "../domain/project/index.js";
 import type { Result } from "../shared/result.js";
@@ -54,11 +66,21 @@ export interface AnnotateAdapter {
 export interface InspectAdapter {
   execute(request: InspectBeaconDraftRequest): Promise<Result<InspectedBeaconDraft, InspectBeaconDraftRefusal>>;
 }
+export interface ApproveAdapter {
+  execute(request: ApproveBeaconDraftRequest): Promise<Result<ApprovedBeaconDraft, ApproveBeaconDraftRefusal>>;
+}
+export type StatusAdapter = Pick<BeaconStatus, "execute">;
+export interface RevokeAdapter {
+  execute(request: RevokeActiveBeaconRequest): Promise<Result<RevokedActiveBeacon, RevokeActiveBeaconRefusal>>;
+}
 
 export interface ProjectScopedAdapters {
   readonly record: RecordAdapter;
   readonly annotate: AnnotateAdapter;
   readonly inspect: InspectAdapter;
+  readonly approve?: ApproveAdapter;
+  readonly status?: StatusAdapter;
+  readonly revoke?: RevokeAdapter;
 }
 
 export interface CliCompositionAdapters {
@@ -87,9 +109,9 @@ export interface CliComposition {
 const clock = { now: () => new Date() };
 const noCancellation = { aborted: false, onAbort: () => () => {} };
 
-function generatedId(kind: "project" | "capture" | "beacon" | "draft" | "request"): string {
+function generatedId(kind: "project" | "capture" | "beacon" | "draft" | "version" | "request"): string {
   const uuid = randomUUID().replace(/^(.{14})./, "$17");
-  const prefix = { project: "proj", capture: "cap", beacon: "bcn", draft: "drf", request: "req" }[kind];
+  const prefix = { project: "proj", capture: "cap", beacon: "bcn", draft: "drf", version: "ver", request: "req" }[kind];
   return `${prefix}_${uuid}`;
 }
 
@@ -123,6 +145,9 @@ function productionAdapters(home: string, currentPath: () => Promise<string>): C
           validator: new AjvContractValidator(), resolver,
         }),
         inspect: new InspectBeaconDraft({ captureStore, beaconStore, hasher }),
+        approve: new ApproveBeaconDraft({ clock, ids, hasher, captureStore, beaconStore }),
+        status: new BeaconStatus({ beaconStore }),
+        revoke: new RevokeActiveBeacon({ clock, beaconStore }),
       };
     },
   };
@@ -162,6 +187,9 @@ export interface UnregisteredCommandSet {
   readonly captureRecord: Command;
   readonly captureAnnotate: Command;
   readonly beaconInspect: Command;
+  readonly beaconApprove: Command;
+  readonly beaconRevoke: Command;
+  readonly status: Command;
 }
 
 export interface UnregisteredCommandSetOptions {
@@ -172,6 +200,7 @@ export interface UnregisteredCommandSetOptions {
   readonly stdinIsTty?: boolean;
   readonly initPrompt?: InputPrompt<unknown>;
   readonly annotationPrompt?: InputPrompt<unknown>;
+  readonly lifecyclePrompt?: BeaconLifecyclePrompt;
   readonly isInteractiveTerminal?: () => boolean;
   readonly writers?: CliCommandWriters;
   readonly setExitCode?: (code: number) => void;
@@ -191,6 +220,8 @@ export function createUnregisteredCommandSet(options: UnregisteredCommandSetOpti
     annotationPrompt: options.annotationPrompt ?? captureAnnotationPrompt(),
   });
   const ids = options.ids ?? { next: generatedId };
+  const lifecyclePrompt = options.lifecyclePrompt ?? beaconLifecyclePrompt();
+  const isInteractiveTerminal = options.isInteractiveTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
   let active: CliComposition | undefined;
   const runtime = {
     writers: options.writers,
@@ -218,7 +249,7 @@ export function createUnregisteredCommandSet(options: UnregisteredCommandSetOpti
     ...runtime,
     ids,
     signal: options.signal ?? noCancellation,
-    isInteractiveTerminal: options.isInteractiveTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)),
+    isInteractiveTerminal,
     resolveProject,
     record: { execute: () => { throw new Error("Project context must be selected before record dispatch"); } },
     recordForProject: (project) => requireScoped(project).record,
@@ -237,7 +268,50 @@ export function createUnregisteredCommandSet(options: UnregisteredCommandSetOpti
     inspect: { execute: () => { throw new Error("Project context must be selected before inspection dispatch"); } },
     inspectForProject: (project) => requireScoped(project).inspect,
   });
-  return { root: new Command("pharos"), init, captureRecord, captureAnnotate, beaconInspect };
+  const requireApprove = (project: ProjectContext) => {
+    const approve = requireScoped(project).approve;
+    if (approve === undefined) throw new Error("Composition did not supply approval adapters");
+    return approve;
+  };
+  const requireStatus = (project: ProjectContext) => {
+    const status = requireScoped(project).status;
+    if (status === undefined) throw new Error("Composition did not supply status adapters");
+    return status;
+  };
+  const requireRevoke = (project: ProjectContext) => {
+    const revoke = requireScoped(project).revoke;
+    if (revoke === undefined) throw new Error("Composition did not supply revocation adapters");
+    return revoke;
+  };
+  const beaconApprove = buildBeaconApproveCommand({
+    ...runtime,
+    ids,
+    isInteractiveTerminal,
+    prompt: lifecyclePrompt,
+    resolveProject,
+    inspect: { execute: () => { throw new Error("Project context must be selected before inspection dispatch"); } },
+    inspectForProject: (project) => requireScoped(project).inspect,
+    approve: { execute: () => { throw new Error("Project context must be selected before approval dispatch"); } },
+    approveForProject: requireApprove,
+  });
+  const beaconRevoke = buildBeaconRevokeCommand({
+    ...runtime,
+    ids,
+    isInteractiveTerminal,
+    prompt: lifecyclePrompt,
+    resolveProject,
+    status: { execute: () => { throw new Error("Project context must be selected before status dispatch"); } },
+    statusForProject: requireStatus,
+    revoke: { execute: () => { throw new Error("Project context must be selected before revocation dispatch"); } },
+    revokeForProject: requireRevoke,
+  });
+  const status = buildStatusCommand({
+    ...runtime,
+    resolveProject,
+    status: { execute: () => { throw new Error("Project context must be selected before status dispatch"); } },
+    statusForProject: requireStatus,
+  });
+  return { root: new Command("pharos"), init, captureRecord, captureAnnotate, beaconInspect, beaconApprove, beaconRevoke, status };
 }
 
 /**
@@ -257,16 +331,18 @@ export function registerGuidedJourney(root: Command, commands: UnregisteredComma
     .addCommand(commands.captureRecord)
     .addCommand(commands.captureAnnotate);
   const beacon = new Command("beacon")
-    .description("Open Beacon draft commands")
+    .description("Beacon lifecycle commands")
     .action((_options: unknown, command: Command) => {
       command.error("missing Beacon command", {
         code: "commander.missingSubcommand",
         exitCode: 2,
       });
     })
-    .addCommand(commands.beaconInspect);
+    .addCommand(commands.beaconInspect)
+    .addCommand(commands.beaconApprove)
+    .addCommand(commands.beaconRevoke);
 
-  root.addCommand(commands.init).addCommand(capture).addCommand(beacon);
+  root.addCommand(commands.init).addCommand(capture).addCommand(beacon).addCommand(commands.status);
 }
 
 export { noCancellation };

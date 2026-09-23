@@ -51,15 +51,18 @@ export async function exerciseBeaconStore(factory: BeaconStoreFactory): Promise<
   );
   await expect(store.abandonDraft("bcn_1", { draftId: "draft_2", reason: "done", abandonedAt: "2026-01-01T00:00:00.000Z" }, "fresh-abandon"))
     .resolves.toMatchObject({ ok: false, error: { rule: "draft-not-open" } });
+  await expect(store.abandonDraft("bcn_1", {
+    draftId: "draft_1", reason: "approval contract setup", abandonedAt: "2026-01-01T00:00:00.000Z",
+  }, "abandon-approval-source")).resolves.toMatchObject({ ok: true });
   await expect(store.createDraft("bcn_1", create("draft_3"), "create-3")).resolves.toMatchObject({ ok: true });
-  const approval = { draftId: "draft_3", versionId: "ver_1", reviewedHash: new JcsSha256Hasher().hash(project(content("draft_3"))), approvedAt: "2026-01-01T00:00:00.000Z", actor: null, staleOriginAcknowledged: false };
+  const approval = { draftId: "draft_3", expectedRevision: 1, versionId: "ver_1", reviewedHash: new JcsSha256Hasher().hash(project(content("draft_3"))), approvedAt: "2026-01-01T00:00:00.000Z", actor: null, staleOriginAcknowledged: false };
   await replay(
     () => store.approveDraft("bcn_1", approval, "approve"),
     () => store.approveDraft("bcn_1", { ...approval, actor: "changed" }, "approve"),
   );
   const duplicateSource = content("draft_4");
   await expect(store.createDraft("bcn_1", create("draft_4", duplicateSource), "create-4")).resolves.toMatchObject({ ok: true });
-  await expect(store.approveDraft("bcn_1", { ...approval, draftId: "draft_4", reviewedHash: new JcsSha256Hasher().hash(project(duplicateSource)) }, "fresh-approve"))
+  await expect(store.approveDraft("bcn_1", { ...approval, draftId: "draft_4", expectedRevision: 1, reviewedHash: new JcsSha256Hasher().hash(project(duplicateSource)) }, "fresh-approve"))
     .resolves.toMatchObject({ ok: false, error: { rule: "duplicate-version-id", versionId: "ver_1" } });
   await replay(
     () => store.revokeVersion("bcn_1", { versionId: "ver_1", reason: "done", actor: null, revokedAt: "2026-01-02T00:00:00.000Z" }, "revoke"),

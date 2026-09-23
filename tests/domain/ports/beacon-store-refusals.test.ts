@@ -5,10 +5,10 @@ import type { BeaconStoreRefusal } from "../../../src/domain/ports/index.js";
 // clause. `classifyRefusal`'s explicit `string` return type means TS2366
 // ("Function lacks ending return statement") fires at `tsc --noEmit` if any
 // member of `BeaconStoreRefusal` (the 7-member disk union composed with the
-// 10-member domain `BeaconRefusal`) is left unhandled.
+// 14-member domain `BeaconRefusal`) is left unhandled.
 function classifyRefusal(refusal: BeaconStoreRefusal): string {
   switch (refusal.rule) {
-    // BeaconStoreDiskRefusal (7 members) and BeaconRefusal (10 members),
+    // BeaconStoreDiskRefusal (7 members) and BeaconRefusal (14 members),
     // grouped together — no case body between labels, so this is not a
     // fallthrough: every listed rule returns its own name below.
     case "lock-unavailable":
@@ -25,6 +25,10 @@ function classifyRefusal(refusal: BeaconStoreRefusal): string {
     case "source-draft-has-no-content":
     case "version-not-found":
     case "version-already-revoked":
+    case "invalid-revocation-reason":
+    case "ambiguous-open-drafts":
+    case "active-version-not-found":
+    case "active-version-mismatch":
     case "duplicate-version-id":
     case "reviewed-hash-mismatch":
     case "stale-origin-not-acknowledged":
@@ -78,6 +82,20 @@ describe("BeaconStoreRefusal exhaustiveness", () => {
   });
 
   it("classifies a composed domain BeaconRefusal member by its own rule", () => {
+    expect(classifyRefusal({ rule: "invalid-revocation-reason" })).toBe(
+      "invalid-revocation-reason",
+    );
+    expect(classifyRefusal({ rule: "ambiguous-open-drafts", beaconId: "bcn_1" })).toBe(
+      "ambiguous-open-drafts",
+    );
+    expect(classifyRefusal({ rule: "active-version-not-found", beaconId: "bcn_1" })).toBe(
+      "active-version-not-found",
+    );
+    expect(classifyRefusal({
+      rule: "active-version-mismatch",
+      expectedActiveVersionId: "ver_1",
+      currentActiveVersionId: "ver_2",
+    })).toBe("active-version-mismatch");
     expect(classifyRefusal({ rule: "draft-not-found", draftId: "drf_1" })).toBe(
       "draft-not-found",
     );

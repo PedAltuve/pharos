@@ -37,6 +37,26 @@ export interface VersionAlreadyRevoked {
   readonly versionId: string;
 }
 
+export interface InvalidRevocationReason {
+  readonly rule: "invalid-revocation-reason";
+}
+
+export interface AmbiguousOpenDrafts {
+  readonly rule: "ambiguous-open-drafts";
+  readonly beaconId: string;
+}
+
+export interface ActiveVersionNotFound {
+  readonly rule: "active-version-not-found";
+  readonly beaconId: string;
+}
+
+export interface ActiveVersionMismatch {
+  readonly rule: "active-version-mismatch";
+  readonly expectedActiveVersionId: string | null;
+  readonly currentActiveVersionId: string | null;
+}
+
 export interface DuplicateVersionId {
   readonly rule: "duplicate-version-id";
   readonly versionId: string;
@@ -64,6 +84,10 @@ export type BeaconRefusal =
   | SourceDraftHasNoContent
   | VersionNotFound
   | VersionAlreadyRevoked
+  | InvalidRevocationReason
+  | AmbiguousOpenDrafts
+  | ActiveVersionNotFound
+  | ActiveVersionMismatch
   | DuplicateVersionId
   | ReviewedHashMismatch
   | StaleOriginNotAcknowledged;

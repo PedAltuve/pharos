@@ -17,6 +17,7 @@ import {
   createJournalEntry,
   keyHash,
   lookupJournal,
+  revokeActiveVersionInput,
   revokeVersionInput,
   updateDraftInput,
 } from "../../../src/adapters/fs-beacon-store/journal.js";
@@ -44,7 +45,7 @@ describe("idempotency journal", () => {
     };
 
     expect(approveInput("b", {
-      draftId: "d", reviewedHash: "h", versionId: "v", approvedAt: "t",
+      draftId: "d", expectedRevision: 1, reviewedHash: "h", versionId: "v", approvedAt: "t",
       actor: null, staleOriginAcknowledged: true,
     })).toHaveProperty("method", "approveDraft");
     expect(createDraftInput("b", {
@@ -60,6 +61,21 @@ describe("idempotency journal", () => {
       versionId: "v", reason: "r", actor: null, revokedAt: "t",
     })).toHaveProperty("method", "revokeVersion");
     expect(hashes).toHaveLength(2);
+  });
+
+  it("uses stable approval and active-revocation request semantics, not generated outputs", () => {
+    expect(approveInput("b", {
+      draftId: "d", expectedRevision: 1, reviewedHash: "h", versionId: "ver_first",
+      approvedAt: "first", actor: null, staleOriginAcknowledged: true,
+    })).toEqual(approveInput("b", {
+      draftId: "d", expectedRevision: 1, reviewedHash: "h", versionId: "ver_retry",
+      approvedAt: "retry", actor: null, staleOriginAcknowledged: true,
+    }));
+    expect(revokeActiveVersionInput("b", {
+      expectedActiveVersionId: "ver_first", reason: " withdrawn ", actor: null, revokedAt: "first",
+    })).toEqual(revokeActiveVersionInput("b", {
+      expectedActiveVersionId: null, reason: "withdrawn", actor: null, revokedAt: "retry",
+    }));
   });
 
   it("ignores project-excluded source fields when hashing update input", () => {

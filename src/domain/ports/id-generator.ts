@@ -1,4 +1,4 @@
-export type GeneratedIdKind = "project" | "capture" | "beacon" | "draft" | "request";
+export type GeneratedIdKind = "project" | "capture" | "beacon" | "draft" | "version" | "request";
 
 /** Produces opaque, typed-prefixed identifiers. Implementations provide UUIDv7 entropy. */
 export interface IdGenerator {

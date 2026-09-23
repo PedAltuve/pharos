@@ -91,6 +91,9 @@ export function createProgram(
       "  pharos capture record",
       "  pharos capture annotate <capture-id>",
       "  pharos beacon inspect <beacon-id>",
+      "  pharos beacon approve <beacon-id>",
+      "  pharos beacon revoke <beacon-id>",
+      "  pharos status <beacon-id>",
       "",
     ].join("\n"));
   registerGuidedJourney(program, commands);

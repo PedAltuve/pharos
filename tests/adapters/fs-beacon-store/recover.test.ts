@@ -67,7 +67,7 @@ async function approve(root: string, beaconId: string, draftId: string, versionI
     draftId, label: draftId, beaconTitle: beaconId, origin, content: source,
   }, `create-${beaconId}`)).resolves.toMatchObject({ ok: true });
   await expect(store.approveDraft(beaconId, {
-    draftId, versionId, reviewedHash: hasher.hash(project(source)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: false,
+    draftId, expectedRevision: 1, versionId, reviewedHash: hasher.hash(project(source)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: false,
   }, `approve-${beaconId}`)).resolves.toMatchObject({ ok: true });
 }
 
@@ -111,13 +111,13 @@ describe("FsBeaconStore.recoverProject", () => {
     await mkdir(approvalRoot);
     await createOpenDraft(approvalRoot, "bcn_1", "draft_1");
     const approvalSource = content("draft_1");
-    await expect(new FsBeaconStore({ projectRoot: approvalRoot, hasher, writer: new CrashAfterWriter("active.json") }).approveDraft("bcn_1", { draftId: "draft_1", versionId: "ver_1", reviewedHash: hasher.hash(project(approvalSource)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: false }, "approval-crash")).rejects.toBeInstanceOf(InjectedCrash);
+    await expect(new FsBeaconStore({ projectRoot: approvalRoot, hasher, writer: new CrashAfterWriter("active.json") }).approveDraft("bcn_1", { draftId: "draft_1", expectedRevision: 1, versionId: "ver_1", reviewedHash: hasher.hash(project(approvalSource)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: false }, "approval-crash")).rejects.toBeInstanceOf(InjectedCrash);
     await recover(approvalRoot, "closed-draft");
 
     const revokeRoot = join(projectDir, "revoke");
     await mkdir(revokeRoot);
     await approve(revokeRoot, "bcn_1", "draft_1", "ver_1");
-    await expect(new FsBeaconStore({ projectRoot: revokeRoot, hasher, writer: new CrashAfterWriter("revocation.json") }).revokeVersion("bcn_1", { versionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "2026-09-04T00:00:00.000Z" }, "revoke-crash")).rejects.toBeInstanceOf(InjectedCrash);
+    await expect(new FsBeaconStore({ projectRoot: revokeRoot, hasher, writer: new CrashAfterWriter("revocation.json") }).revokeActiveVersion("bcn_1", { expectedActiveVersionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "2026-09-04T00:00:00.000Z" }, "revoke-crash")).rejects.toBeInstanceOf(InjectedCrash);
     await recover(revokeRoot, "removed-revoked-active-pointer");
   });
 

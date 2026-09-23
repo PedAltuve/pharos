@@ -201,4 +201,46 @@ describe("revokeVersion", () => {
     });
     expect(beacon).toEqual(before);
   });
+
+  it("trims a non-empty revocation reason before persisting it", () => {
+    const beacon: Beacon = {
+      ...baseBeacon(),
+      versions: { ver_2: activeVersion("ver_2", 2) },
+      activeVersionId: "ver_2",
+    };
+
+    const result = revokeVersion(beacon, {
+      versionId: "ver_2",
+      reason: "  Recalled by operator  ",
+      actor: "operator_1",
+      revokedAt: "2026-01-04T00:00:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        activeVersionId: null,
+        versions: { ver_2: { revocation: { reason: "Recalled by operator" } } },
+      },
+    });
+  });
+
+  it.each(["", "   ", "\n\t"])('refuses an empty revocation reason %j without mutation', (reason) => {
+    const beacon: Beacon = {
+      ...baseBeacon(),
+      versions: { ver_2: activeVersion("ver_2", 2) },
+      activeVersionId: "ver_2",
+    };
+    const before = structuredClone(beacon);
+
+    const result = revokeVersion(beacon, {
+      versionId: "ver_2",
+      reason,
+      actor: "operator_1",
+      revokedAt: "2026-01-04T00:00:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: false, error: { rule: "invalid-revocation-reason" } });
+    expect(beacon).toEqual(before);
+  });
 });

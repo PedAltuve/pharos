@@ -1,5 +1,6 @@
-import { cancel, isCancel, select, text } from "@clack/prompts";
-import type { InputPrompt } from "./input.js";
+import { cancel, confirm, isCancel, select, text } from "@clack/prompts";
+import { stderr } from "node:process";
+import type { BeaconLifecyclePrompt, InputPrompt } from "./input.js";
 
 /** CLI-only Clack bridge. It returns JSON-shaped objects consumed by the same validators as --input. */
 export function projectInitPrompt(): InputPrompt<Record<string, unknown>> {
@@ -47,6 +48,29 @@ export function captureAnnotationPrompt(): InputPrompt<unknown> {
         // Validation receives this untrusted value and returns its stable refusal.
         return annotation;
       }
+    },
+  };
+}
+
+export function beaconLifecyclePrompt(): BeaconLifecyclePrompt {
+  return {
+    async confirmApproval(input) {
+      const response = await confirm({
+        message: `Approve Beacon ${input.beaconId}, draft ${input.draftId}, capture ${input.captureId}, semantic hash ${input.semanticHash}?`,
+        output: stderr,
+      });
+      return isCancel(response) ? undefined : response === true;
+    },
+    async requestRevocationReason() {
+      const response = await text({ message: "Revocation reason", output: stderr });
+      return isCancel(response) || typeof response !== "string" ? undefined : response;
+    },
+    async confirmRevocation(input) {
+      const response = await confirm({
+        message: `Revoke active version ${input.expectedActiveVersionId} of Beacon ${input.beaconId} with reason: ${input.reason}?`,
+        output: stderr,
+      });
+      return isCancel(response) ? undefined : response === true;
     },
   };
 }

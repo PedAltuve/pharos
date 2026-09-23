@@ -7,6 +7,7 @@ import type {
   CreateDraftCommand,
   ForkDraftCommand,
   RevokeVersionCommand,
+  RevokeActiveVersionCommand,
   UpdateDraftCommand,
 } from "../beacon/index.js";
 import type { BeaconStoreRefusal } from "./beacon-store-refusals.js";
@@ -54,6 +55,12 @@ export interface BeaconStore {
   revokeVersion(
     beaconId: string,
     cmd: RevokeVersionCommand,
+    key: IdempotencyKey,
+  ): Promise<Result<Beacon, BeaconStoreRefusal>>;
+  /** Optional only for legacy read-only test doubles; production stores implement active-only revocation. */
+  revokeActiveVersion?(
+    beaconId: string,
+    cmd: RevokeActiveVersionCommand,
     key: IdempotencyKey,
   ): Promise<Result<Beacon, BeaconStoreRefusal>>;
 }

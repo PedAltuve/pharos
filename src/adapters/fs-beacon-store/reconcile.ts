@@ -606,8 +606,8 @@ function isApprovalMethod(value: string): value is "approveDraft" {
   return value === "approveDraft";
 }
 
-function isRevocationMethod(value: string): value is "revokeVersion" {
-  return value === "revokeVersion";
+function isRevocationMethod(value: string): value is "revokeVersion" | "revokeActiveVersion" {
+  return value === "revokeVersion" || value === "revokeActiveVersion";
 }
 
 /**

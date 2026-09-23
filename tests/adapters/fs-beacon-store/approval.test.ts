@@ -45,6 +45,7 @@ async function exists(path: string): Promise<boolean> {
 
 function approveCmd(overrides: Partial<{
   draftId: string;
+  expectedRevision: number;
   versionId: string;
   reviewedHash: string;
   approvedAt: string;
@@ -53,6 +54,7 @@ function approveCmd(overrides: Partial<{
 }> = {}) {
   return {
     draftId: "draft_1",
+    expectedRevision: 1,
     versionId: "ver_1",
     reviewedHash: hasher.hash(project(content("reviewed"))),
     approvedAt: "2026-09-03T00:00:00.000Z",
@@ -157,6 +159,7 @@ describe("FsBeaconStore.approveDraft — hash re-verification (fs-beacon-store R
 
     const result = await store.approveDraft("bcn_1", {
       draftId: "draft_1",
+      expectedRevision: 2,
       versionId: "ver_1",
       reviewedHash: hasher.hash(project(reviewedContent)),
       approvedAt: "2026-09-03T00:00:00.000Z",
@@ -168,6 +171,40 @@ describe("FsBeaconStore.approveDraft — hash re-verification (fs-beacon-store R
     const versionDir = join(projectDir, "beacons", "bcn_1", "versions", "ver_1");
     expect(await exists(join(versionDir, "semantics.json"))).toBe(false);
     expect(await exists(join(versionDir, "manifest.json"))).toBe(false);
+  });
+});
+
+describe("FsBeaconStore.approveDraft — sequential replay", () => {
+  it("replays the first canonical approval despite regenerated version output fields", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+
+    const first = await store.approveDraft("bcn_1", approveCmd({
+      versionId: "ver_original", approvedAt: "2026-09-03T00:00:00.000Z",
+    }), "approve-replay-key");
+    const replay = await store.approveDraft("bcn_1", approveCmd({
+      versionId: "ver_regenerated", approvedAt: "2026-09-04T00:00:00.000Z",
+    }), "approve-replay-key");
+
+    expect(replay).toEqual(first);
+    expect(first).toMatchObject({
+      ok: true,
+      value: {
+        activeVersionId: "ver_original",
+        versions: {
+          ver_original: {
+            versionId: "ver_original",
+            approval: { approvedAt: "2026-09-03T00:00:00.000Z" },
+          },
+        },
+      },
+    });
+    const canonical = await scanBeacon(projectDir, "bcn_1");
+    expect(canonical.beacon.activeVersionId).toBe("ver_original");
+    expect(canonical.beacon.versions.ver_original?.approval.approvedAt).toBe(
+      "2026-09-03T00:00:00.000Z",
+    );
+    expect(canonical.beacon.versions).not.toHaveProperty("ver_regenerated");
   });
 });
 
@@ -201,11 +238,14 @@ describe("FsBeaconStore.approveDraft — crash before active swap (fs-beacon-sto
       writer: new CrashAfterPathWriter("manifest.json"),
     });
     await seedOpenDraft(crashingStore, "draft_1");
-    await seedOpenDraft(crashingStore, "draft_2");
     await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "orphan-key"))
       .rejects.toBeInstanceOf(InjectedCrash);
 
     const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await expect(store.abandonDraft("bcn_1", {
+      draftId: "draft_1", reason: "superseded crash attempt", abandonedAt: "2026-09-03T00:00:01.000Z",
+    }, "abandon-orphan-draft")).resolves.toMatchObject({ ok: true });
+    await seedOpenDraft(store, "draft_2");
     const result = await store.approveDraft("bcn_1", approveCmd({
       draftId: "draft_2",
       versionId: "ver_2",
@@ -315,6 +355,9 @@ describe("FsBeaconStore.approveDraft — D6b adoption probe", () => {
   it("refuses a stale interrupted attempt after an unrelated approval, then permits a fresh version", async () => {
     await crashAfterManifest("draft_1", "ver_1", "approve-key", true);
     const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await expect(store.abandonDraft("bcn_1", {
+      draftId: "draft_1", reason: "superseded crash attempt", abandonedAt: "2026-09-03T00:00:01.000Z",
+    }, "abandon-orphan-draft")).resolves.toMatchObject({ ok: true });
     await seedOpenDraft(store, "draft_2");
     await expect(store.approveDraft("bcn_1", approveCmd({
       draftId: "draft_2", versionId: "ver_2",
@@ -325,8 +368,9 @@ describe("FsBeaconStore.approveDraft — D6b adoption probe", () => {
         ok: false,
         error: { rule: "stale-attempt-artifact", artifact: "manifest", ownerId: "ver_1" },
       });
+    await seedOpenDraft(store, "draft_3");
     await expect(store.approveDraft("bcn_1", approveCmd({
-      versionId: "ver_3", staleOriginAcknowledged: true,
+      draftId: "draft_3", versionId: "ver_3", staleOriginAcknowledged: true,
     }), "fresh-key"))
       .resolves.toMatchObject({ ok: true, value: { activeVersionId: "ver_3" } });
   });
@@ -339,15 +383,15 @@ describe("FsBeaconStore.approveDraft — D6b adoption probe", () => {
     const crashingStore = new FsBeaconStore({
       projectRoot: projectDir, hasher, writer: new CrashAfterPathWriter("manifest.json"),
     });
-    await expect(crashingStore.approveDraft("bcn_1", approveCmd(), "approve-key"))
+    await expect(crashingStore.approveDraft("bcn_1", approveCmd({ expectedRevision: 3 }), "approve-key"))
       .rejects.toBeInstanceOf(InjectedCrash);
     await expect(readFile(join(
       projectDir, "beacons", "bcn_1", "versions", "ver_1", "manifest.json"), "utf8",
     )).resolves.toContain('"approved_revision": 3');
     await store.updateDraft("bcn_1", { draftId: "draft_1", expectedRevision: 3, content: content("reviewed") }, "update-4");
 
-    await expect(store.approveDraft("bcn_1", approveCmd(), "approve-key"))
-      .resolves.toMatchObject({ ok: false, error: { rule: "stale-attempt-artifact" } });
+    await expect(store.approveDraft("bcn_1", approveCmd({ expectedRevision: 4 }), "approve-key"))
+      .resolves.toMatchObject({ ok: false, error: { rule: "idempotency-key-conflict" } });
   });
 
   it("adopts identical interrupted artifacts and completes the original approval exactly once", async () => {
