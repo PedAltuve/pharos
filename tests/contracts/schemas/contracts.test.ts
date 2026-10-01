@@ -31,6 +31,80 @@ const validAnnotation = {
   readiness_intent: { side_effect_class: "stateless", isolation: null },
 };
 
+describe("host consent JSON contracts", () => {
+  it("rejects impossible expiry values instead of interpreting calendar-shaped text", async () => {
+    const request = await validator("operator-consent-request");
+    const grant = await validator("operator-consent-grant");
+    const binding = { action: "approve", projectId: "p", beaconId: "b", draftId: "d", expectedRevision: 1, semanticHash: "h", requestId: "r" };
+    const base = { binding, challengeId: "c", expiresAtEpochMs: 1893456000000 };
+    expect(request({ contract: "pharos.operator-consent-request/1", ...base })).toBe(true);
+    expect(grant({ contract: "pharos.operator-consent-grant/1", decision: "granted", ...base, hostId: "h", keyId: "k", algorithm: "ed25519", signature: "s" })).toBe(true);
+    for (const expiry of ["2030-02-30T99:99:99Z", -1, 1.5, "1893456000000"]) {
+      expect(request({ contract: "pharos.operator-consent-request/1", ...base, expiresAtEpochMs: expiry })).toBe(false);
+      expect(grant({ contract: "pharos.operator-consent-grant/1", decision: "granted", ...base, expiresAtEpochMs: expiry, hostId: "h", keyId: "k", algorithm: "ed25519", signature: "s" })).toBe(false);
+    }
+  });
+
+  it("accepts exact approval and revocation requests and signed decisions", async () => {
+    const request = await validator("operator-consent-request");
+    const grant = await validator("operator-consent-grant");
+    const binding = { action: "approve", projectId: "p", beaconId: "b", draftId: "d", expectedRevision: 1, semanticHash: "sha256:x", requestId: "r", staleOriginAcknowledged: true };
+    const base = { binding, challengeId: "c", expiresAtEpochMs: 1893456000000 };
+    const requested = { contract: "pharos.operator-consent-request/1", ...base };
+    const signed = { contract: "pharos.operator-consent-grant/1", decision: "granted", ...base, hostId: "host", keyId: "key", algorithm: "ed25519", signature: "signed" };
+    const revoke = { action: "revoke", projectId: "p", beaconId: "b", expectedActiveVersion: "v", reason: "retire", requestId: "r" };
+    expect(request(requested)).toBe(true);
+    expect(request({ ...requested, binding: revoke })).toBe(true);
+    expect(grant(signed)).toBe(true);
+    expect(grant({ ...signed, decision: "declined", binding: revoke })).toBe(true);
+    for (const bad of [true, "operator", { tokenId: "arbitrary" }, { ...signed, signature: "" }, { ...signed, signature: undefined }, { ...signed, contract: "pharos.operator-consent-grant/2" }, { ...signed, privateKey: "secret" }, { ...signed, binding: { ...binding, action: "revoke" } }, { ...signed, binding: { ...binding, expectedRevision: Number.MAX_SAFE_INTEGER + 1 } }, { ...signed, binding: { ...revoke, reason: "  " } }]) expect(grant(bad)).toBe(false);
+    for (const bad of [{ ...requested, contract: "pharos.operator-consent-request/2" }, { ...requested, binding: { ...binding, expectedRevision: "1" } }, { ...requested, binding: { ...binding, expectedRevision: Number.MAX_SAFE_INTEGER + 1 } }, { ...requested, binding: { ...revoke, reason: " trailing " } }]) expect(request(bad)).toBe(false);
+  });
+});
+
+describe("isolated v2 stale approval JSON contracts", () => {
+  it("accepts complete stale approval requests and signed grants without changing v1 non-stale acceptance", async () => {
+    const request = await validator("operator-consent-request-v2");
+    const grant = await validator("operator-consent-grant-v2");
+    const binding = { action: "approve", projectId: "p", beaconId: "b", draftId: "d", expectedRevision: 1, semanticHash: "sha256:draft", requestId: "r", staleOriginAcknowledged: true, reviewed: { activeVersionId: "v", activeSemanticHash: "sha256:active", comparisonDigest: "sha256:comparison" } };
+    const base = { binding, challengeId: "c", expiresAtEpochMs: 1893456000000 };
+    expect(request({ contract: "pharos.operator-consent-request/2", ...base })).toBe(true);
+    expect(grant({ contract: "pharos.operator-consent-grant/2", decision: "granted", ...base, hostId: "host", keyId: "key", algorithm: "ed25519", signature: "signed" })).toBe(true);
+    expect(request({ contract: "pharos.operator-consent-request/2", ...base, binding: { ...binding, reviewed: { activeVersionId: null, activeSemanticHash: null, comparisonDigest: "sha256:none" } } })).toBe(true);
+    const v1 = { action: "approve", projectId: "p", beaconId: "b", draftId: "d", expectedRevision: 1, semanticHash: "sha256:draft", requestId: "r" };
+    expect((await validator("operator-consent-request"))({ contract: "pharos.operator-consent-request/1", ...base, binding: v1 })).toBe(true);
+    expect((await validator("operator-consent-grant"))({ contract: "pharos.operator-consent-grant/1", decision: "granted", ...base, binding: v1, hostId: "host", keyId: "key", algorithm: "ed25519", signature: "signed" })).toBe(true);
+  });
+
+  it("rejects incomplete or unsafe v2 bindings and envelopes for both request and grant", async () => {
+    const request = await validator("operator-consent-request-v2");
+    const grant = await validator("operator-consent-grant-v2");
+    const binding = { action: "approve", projectId: "p", beaconId: "b", draftId: "d", expectedRevision: 1, semanticHash: "h", requestId: "r", staleOriginAcknowledged: true, reviewed: { activeVersionId: "v", activeSemanticHash: "h", comparisonDigest: "digest" } };
+    const base = { binding, challengeId: "c", expiresAtEpochMs: 1893456000000 };
+    const accepts = (value: Record<string, unknown>) => {
+      expect(request({ contract: "pharos.operator-consent-request/2", ...base, ...value })).toBe(false);
+      expect(grant({ contract: "pharos.operator-consent-grant/2", decision: "granted", ...base, hostId: "host", keyId: "key", algorithm: "ed25519", signature: "signed", ...value })).toBe(false);
+    };
+    for (const field of ["activeVersionId", "activeSemanticHash", "comparisonDigest"] as const) {
+      const reviewed: Record<string, unknown> = { ...binding.reviewed };
+      delete reviewed[field];
+      accepts({ binding: { ...binding, reviewed } });
+    }
+    accepts({ binding: { ...binding, reviewed: { ...binding.reviewed, activeVersionId: null } } });
+    accepts({ binding: { ...binding, reviewed: { ...binding.reviewed, activeSemanticHash: null } } });
+    accepts({ binding: { ...binding, reviewed: { ...binding.reviewed, extra: true } } });
+    accepts({ binding: { ...binding, extra: true } });
+    accepts({ extra: true });
+    accepts({ binding: { ...binding, action: "revoke" } });
+    accepts({ binding: { action: "revoke", projectId: "p", beaconId: "b", expectedActiveVersion: "v", reason: "retire", requestId: "r" } });
+    accepts({ binding: { ...binding, staleOriginAcknowledged: false } });
+    for (const revision of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) accepts({ binding: { ...binding, expectedRevision: revision } });
+    for (const expiry of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1893456000000"]) accepts({ expiresAtEpochMs: expiry });
+    expect(request({ contract: "pharos.operator-consent-request/1", ...base })).toBe(false);
+    expect(grant({ contract: "pharos.operator-consent-grant/1", decision: "granted", ...base, hostId: "host", keyId: "key", algorithm: "ed25519", signature: "signed" })).toBe(false);
+  });
+});
+
 describe("v1 JSON Schema 2020-12 ingress contracts", () => {
   it("declares three closed draft-2020-12 contracts and accepts their complete valid shapes", async () => {
     const [projectInit, annotation, envelope] = await Promise.all([
