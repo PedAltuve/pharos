@@ -76,6 +76,16 @@ export interface StaleOriginNotAcknowledged {
   readonly activeVersionId: string | null;
 }
 
+export interface StaleOriginReviewRequired {
+  readonly rule: "stale-origin-review-required";
+  readonly draftId: string;
+}
+
+export interface ReviewedActiveSnapshotMismatch {
+  readonly rule: "reviewed-active-snapshot-mismatch";
+  readonly draftId: string;
+}
+
 export type BeaconRefusal =
   | DuplicateDraftId
   | DraftNotFound
@@ -90,4 +100,6 @@ export type BeaconRefusal =
   | ActiveVersionMismatch
   | DuplicateVersionId
   | ReviewedHashMismatch
-  | StaleOriginNotAcknowledged;
+  | StaleOriginNotAcknowledged
+  | StaleOriginReviewRequired
+  | ReviewedActiveSnapshotMismatch;

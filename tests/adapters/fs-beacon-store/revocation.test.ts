@@ -10,6 +10,7 @@ import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-wri
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { keyHash } from "../../../src/adapters/fs-beacon-store/journal.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
+import { staleComparisonDigest } from "../../../src/adapters/host-consent-verifier/index.js";
 
 let projectDir: string;
 const hasher = new JcsSha256Hasher();
@@ -28,8 +29,14 @@ async function approve(store: FsBeaconStore, draftId: string, versionId: string)
   await expect(store.createDraft("bcn_1", {
     draftId, label: draftId, beaconTitle: "Beacon", origin, content: source,
   }, `create-${draftId}`)).resolves.toMatchObject({ ok: true });
+  const snapshot = await store.getActiveSemanticSnapshot("bcn_1");
+  if (!snapshot.ok) throw new Error("active snapshot lookup failed");
+  const reviewedHash = hasher.hash(project(source));
   await expect(store.approveDraft("bcn_1", {
-    draftId, expectedRevision: 1, versionId, reviewedHash: hasher.hash(project(source)), approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: versionId !== "ver_1",
+    draftId, expectedRevision: 1, versionId, reviewedHash, approvedAt: "2026-09-03T00:00:00.000Z", actor: "operator", staleOriginAcknowledged: versionId !== "ver_1",
+    reviewedActiveVersionId: snapshot.value?.versionId ?? null,
+    reviewedActiveSemanticHash: snapshot.value?.semanticHash ?? null,
+    comparisonDigest: staleComparisonDigest(reviewedHash, snapshot.value?.versionId ?? null, snapshot.value?.semanticHash ?? null),
   }, `approve-${draftId}`)).resolves.toMatchObject({ ok: true, value: { activeVersionId: versionId } });
 }
 

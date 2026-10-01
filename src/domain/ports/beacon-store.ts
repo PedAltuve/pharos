@@ -10,6 +10,7 @@ import type {
   RevokeActiveVersionCommand,
   UpdateDraftCommand,
 } from "../beacon/index.js";
+import type { SemanticProjection } from "../semantics/index.js";
 import type { BeaconStoreRefusal } from "./beacon-store-refusals.js";
 
 export type IdempotencyKey = string;
@@ -20,7 +21,15 @@ export interface StoreCreateDraftCommand extends CreateDraftCommand {
   readonly beaconTitle: string;
 }
 
+export interface ActiveSemanticSnapshot {
+  readonly versionId: string;
+  readonly semanticHash: string;
+  readonly semantics: SemanticProjection;
+}
+
 export interface BeaconStore {
+  /** Optional only for legacy read-only test doubles; production stores implement this reader. */
+  getActiveSemanticSnapshot?(beaconId: string): Promise<Result<ActiveSemanticSnapshot | null, BeaconStoreRefusal>>;
   getBeacon(beaconId: string): Promise<Result<Beacon, BeaconStoreRefusal>>;
   listBeacons(): Promise<Result<readonly Beacon[], BeaconStoreRefusal>>;
   getActiveVersion(

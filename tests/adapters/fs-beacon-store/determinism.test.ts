@@ -8,6 +8,7 @@ import { project } from "../../../src/domain/semantics/index.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { scanVersions } from "../../../src/adapters/fs-beacon-store/reconcile.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
+import { staleComparisonDigest } from "../../../src/adapters/host-consent-verifier/index.js";
 
 let root: string;
 const hasher = new JcsSha256Hasher();
@@ -53,7 +54,12 @@ describe("FsBeaconStore determinism", () => {
     await store.createDraft("bcn_root", create("draft_Z", source), "root-create-Z");
     await store.approveDraft("bcn_root", { draftId: "draft_Z", expectedRevision: 1, versionId: "ver_Z", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-01T00:00:00.000Z", actor: null, staleOriginAcknowledged: false }, "root-approve-Z");
     await store.createDraft("bcn_root", create("draft_a", source), "root-create-a");
-    await store.approveDraft("bcn_root", { draftId: "draft_a", expectedRevision: 1, versionId: "ver_a", reviewedHash: hasher.hash(project(source)), approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: true }, "root-approve-a");
+    const snapshot = await store.getActiveSemanticSnapshot("bcn_root");
+    if (!snapshot.ok || !snapshot.value) throw new Error("missing active snapshot");
+    const reviewedHash = hasher.hash(project(source));
+    await store.approveDraft("bcn_root", { draftId: "draft_a", expectedRevision: 1, versionId: "ver_a", reviewedHash, approvedAt: "2026-01-02T00:00:00.000Z", actor: null, staleOriginAcknowledged: true,
+      reviewedActiveVersionId: snapshot.value.versionId, reviewedActiveSemanticHash: snapshot.value.semanticHash,
+      comparisonDigest: staleComparisonDigest(reviewedHash, snapshot.value.versionId, snapshot.value.semanticHash) }, "root-approve-a");
     await store.revokeVersion("bcn_root", { versionId: "ver_Z", reason: "done", actor: null, revokedAt: "2026-01-03T00:00:00.000Z" }, "root-revoke-Z");
     expect(Object.keys((await scanVersions(root, "bcn_root")).versions)).toEqual(["ver_Z", "ver_a"]);
   });

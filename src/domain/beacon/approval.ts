@@ -15,6 +15,9 @@ export interface ApproveDraftCommand {
   readonly approvedAt: string;
   readonly actor: string | null;
   readonly staleOriginAcknowledged: boolean;
+  readonly reviewedActiveVersionId?: string | null;
+  readonly reviewedActiveSemanticHash?: string | null;
+  readonly comparisonDigest?: string;
 }
 
 export function approveDraft(
@@ -62,6 +65,11 @@ export function approveDraft(
       branchedFromVersion: draft.origin.branchedFromVersion,
       activeVersionId: beacon.activeVersionId,
     });
+  }
+
+  if (isStaleOrigin && (cmd.reviewedActiveVersionId === undefined ||
+    cmd.reviewedActiveSemanticHash === undefined || cmd.comparisonDigest === undefined)) {
+    return err({ rule: "stale-origin-review-required", draftId: cmd.draftId });
   }
 
   const nextLocalNumber =

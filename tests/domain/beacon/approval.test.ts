@@ -392,6 +392,9 @@ describe("approveDraft: stale-origin approval with explicit acknowledgment", () 
         actor: "operator_1",
         reviewedHash,
         staleOriginAcknowledged: true,
+        reviewedActiveVersionId: "ver_current",
+        reviewedActiveSemanticHash: reviewedHash,
+        comparisonDigest: stubHasher.hash(["pharos.stale-comparison/2", reviewedHash, "ver_current", reviewedHash]),
       },
       stubHasher,
     );
@@ -406,6 +409,23 @@ describe("approveDraft: stale-origin approval with explicit acknowledgment", () 
     expect(newVersion?.provenance.branchedFromVersion).toBe("ver_old");
     expect(result.value.activeVersionId).toBe("ver_new");
     expect(result.value.drafts["drf_1"]?.status).toBe("closed");
+  });
+});
+
+describe("approveDraft: stale-origin review", () => {
+  it("refuses acknowledged stale approval without a reviewed binding", () => {
+    const beacon: Beacon = {
+      ...withOpenDraft(baseBeacon(), "drf_1"),
+      versions: { ver_current: activeVersion("ver_current", 1) },
+      activeVersionId: "ver_current",
+    };
+    const result = approveDraft(beacon, {
+      draftId: "drf_1", expectedRevision: 1, versionId: "ver_new",
+      approvedAt: "2026-02-01T00:00:00.000Z", actor: "operator_1",
+      reviewedHash: stubHasher.hash(project(baseContent())), staleOriginAcknowledged: true,
+    }, stubHasher);
+    expect(result).toEqual({ ok: false, error: { rule: "stale-origin-review-required", draftId: "drf_1" } });
+    expect(beacon.activeVersionId).toBe("ver_current");
   });
 });
 

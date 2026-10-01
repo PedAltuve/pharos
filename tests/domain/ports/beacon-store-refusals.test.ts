@@ -32,6 +32,8 @@ function classifyRefusal(refusal: BeaconStoreRefusal): string {
     case "duplicate-version-id":
     case "reviewed-hash-mismatch":
     case "stale-origin-not-acknowledged":
+    case "stale-origin-review-required":
+    case "reviewed-active-snapshot-mismatch":
       return refusal.rule;
   }
 }
