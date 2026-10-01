@@ -31,6 +31,9 @@ import type {
   RevokeActiveBeaconRefusal,
   RevokedActiveBeacon,
 } from "../application/index.js";
+import { FsConsentStore } from "../adapters/fs-consent-store/index.js";
+import { buildBeaconConsentPrepareCommand } from "./commands/beacon-consent-prepare.js";
+import { buildBeaconConsentStatusCommand } from "./commands/beacon-consent-status.js";
 import { FsBeaconStore } from "../adapters/fs-beacon-store/index.js";
 import { FsCaptureStore } from "../adapters/fs-capture-store/index.js";
 import { resolvePharosHome } from "../adapters/fs-project/index.js";
@@ -66,11 +69,11 @@ export interface AnnotateAdapter {
 export interface InspectAdapter {
   execute(request: InspectBeaconDraftRequest): Promise<Result<InspectedBeaconDraft, InspectBeaconDraftRefusal>>;
 }
-export interface ApproveAdapter {
+export interface ApproveAdapter extends Pick<ApproveBeaconDraft, "prepareConsent"> {
   execute(request: ApproveBeaconDraftRequest): Promise<Result<ApprovedBeaconDraft, ApproveBeaconDraftRefusal>>;
 }
 export type StatusAdapter = Pick<BeaconStatus, "execute">;
-export interface RevokeAdapter {
+export interface RevokeAdapter extends Pick<RevokeActiveBeacon, "prepareConsent"> {
   execute(request: RevokeActiveBeaconRequest): Promise<Result<RevokedActiveBeacon, RevokeActiveBeaconRefusal>>;
 }
 
@@ -81,6 +84,7 @@ export interface ProjectScopedAdapters {
   readonly approve?: ApproveAdapter;
   readonly status?: StatusAdapter;
   readonly revoke?: RevokeAdapter;
+  readonly consentStore?: Pick<FsConsentStore, "getChallenge">;
 }
 
 export interface CliCompositionAdapters {
@@ -116,6 +120,7 @@ function generatedId(kind: "project" | "capture" | "beacon" | "draft" | "version
 }
 
 function productionAdapters(home: string, currentPath: () => Promise<string>): CliCompositionAdapters {
+  const issueChallenge = () => ({ challengeId: randomUUID(), expiresAtEpochMs: Date.now() + 5 * 60_000 });
   const hasher = new JcsSha256Hasher();
   const projects = new FsProjectContextStore({ home });
   const ids = { next: generatedId };
@@ -134,6 +139,7 @@ function productionAdapters(home: string, currentPath: () => Promise<string>): C
       const projectRoot = join(home, "store", project.projectId);
       const captureStore = new FsCaptureStore({ projectRoot });
       const beaconStore = new FsBeaconStore({ projectRoot, hasher });
+      const consentStore = new FsConsentStore({ projectRoot });
       return {
         record: new RecordCapture({
           clock, ids, hasher, store: captureStore, resolver,
@@ -145,9 +151,10 @@ function productionAdapters(home: string, currentPath: () => Promise<string>): C
           validator: new AjvContractValidator(), resolver,
         }),
         inspect: new InspectBeaconDraft({ captureStore, beaconStore, hasher }),
-        approve: new ApproveBeaconDraft({ clock, ids, hasher, captureStore, beaconStore }),
+        approve: new ApproveBeaconDraft({ clock, ids, hasher, captureStore, beaconStore, consentStore, issueChallenge }),
         status: new BeaconStatus({ beaconStore }),
-        revoke: new RevokeActiveBeacon({ clock, beaconStore }),
+        consentStore,
+        revoke: new RevokeActiveBeacon({ clock, beaconStore, canonicalProjectId: project.projectId, consentStore, issueChallenge }),
       };
     },
   };
@@ -188,6 +195,8 @@ export interface UnregisteredCommandSet {
   readonly captureAnnotate: Command;
   readonly beaconInspect: Command;
   readonly beaconApprove: Command;
+  readonly beaconConsentPrepare: Command;
+  readonly beaconConsentStatus: Command;
   readonly beaconRevoke: Command;
   readonly status: Command;
 }
@@ -305,13 +314,22 @@ export function createUnregisteredCommandSet(options: UnregisteredCommandSetOpti
     revoke: { execute: () => { throw new Error("Project context must be selected before revocation dispatch"); } },
     revokeForProject: requireRevoke,
   });
+  const beaconConsentPrepare = buildBeaconConsentPrepareCommand({
+    ...runtime, resolveProject,
+    approveForProject: (project) => requireScoped(project).approve,
+    revokeForProject: (project) => requireScoped(project).revoke,
+  });
+  const beaconConsentStatus = buildBeaconConsentStatusCommand({
+    ...runtime, resolveProject,
+    storeForProject: (project) => requireScoped(project).consentStore,
+  });
   const status = buildStatusCommand({
     ...runtime,
     resolveProject,
     status: { execute: () => { throw new Error("Project context must be selected before status dispatch"); } },
     statusForProject: requireStatus,
   });
-  return { root: new Command("pharos"), init, captureRecord, captureAnnotate, beaconInspect, beaconApprove, beaconRevoke, status };
+  return { root: new Command("pharos"), init, captureRecord, captureAnnotate, beaconInspect, beaconApprove, beaconConsentPrepare, beaconConsentStatus, beaconRevoke, status };
 }
 
 /**
@@ -339,8 +357,8 @@ export function registerGuidedJourney(root: Command, commands: UnregisteredComma
       });
     })
     .addCommand(commands.beaconInspect)
-    .addCommand(commands.beaconApprove)
-    .addCommand(commands.beaconRevoke);
+    .addCommand(commands.beaconConsentPrepare)
+    .addCommand(commands.beaconConsentStatus);
 
   root.addCommand(commands.init).addCommand(capture).addCommand(beacon).addCommand(commands.status);
 }

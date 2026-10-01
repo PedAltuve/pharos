@@ -13,10 +13,10 @@ export interface StatusCommandDependencies extends CommandRuntime {
 
 function nextAction(status: BeaconLifecycleStatus): CliRenderedOutcome["nextAction"] {
   if (status.authority === "open-draft") {
-    return { command: `pharos beacon approve ${status.beaconId}`, reason: "Review and explicitly approve the open draft" };
+    return { command: `pharos beacon prepare approve ${status.beaconId} --request-id <request-id> --format json`, reason: "Prepare the open draft for explicit host-mediated approval" };
   }
   if (status.authority === "active-approved") {
-    return { command: `pharos beacon revoke ${status.beaconId}`, reason: "Revoke the current active version when required" };
+    return { command: `pharos beacon prepare revoke ${status.beaconId} --request-id <request-id> --format json`, reason: "Prepare host-mediated revocation of the current active version when required" };
   }
   return { command: "pharos capture record", reason: "Record and annotate a new capture before creating a draft" };
 }

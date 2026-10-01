@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { Command, CommanderError } from "commander";
+import { jsonEnvelope, refusalOutcome } from "./envelope.js";
 import {
   createUnregisteredCommandSet,
   registerGuidedJourney,
@@ -91,12 +92,27 @@ export function createProgram(
       "  pharos capture record",
       "  pharos capture annotate <capture-id>",
       "  pharos beacon inspect <beacon-id>",
-      "  pharos beacon approve <beacon-id>",
-      "  pharos beacon revoke <beacon-id>",
+      "  pharos beacon prepare <approve|revoke> <beacon-id> --request-id <request-id> --format json",
+      "  pharos beacon consent-status <request-id> --format json",
       "  pharos status <beacon-id>",
       "",
     ].join("\n"));
   registerGuidedJourney(program, commands);
+  // Commander exit overrides are per-command, not inherited by nested parsers.
+  const overrideNested = (command: Command): void => {
+    for (const child of command.commands) {
+      child.exitOverride();
+      child.configureOutput({ writeOut, writeErr, outputError: (str, write) => write(str) });
+      overrideNested(child);
+    }
+  };
+  overrideNested(program);
+  const beacon = program.commands.find((child) => child.name() === "beacon");
+  beacon?.argument("[unsupportedCommand]").action((unsupportedCommand: string | undefined, _options, command: Command) => {
+    command.error(unsupportedCommand === undefined ? "missing Beacon command" : `unknown command '${unsupportedCommand}'`, {
+      code: unsupportedCommand === undefined ? "commander.missingSubcommand" : "commander.unknownCommand", exitCode: 2,
+    });
+  });
 
   return program;
 }
@@ -106,9 +122,13 @@ export async function runCli(
   options: ProgramOptions = {},
 ): Promise<number> {
   let productExitCode = 0;
+  const jsonUsage = argv.some((arg, index) =>
+    arg === "--format=json" || (arg === "--format" && argv[index + 1] === "json"));
+  const nestedJsonUsage = jsonUsage && argv[2] === "beacon";
+  const bufferedErrors: string[] = [];
   const writers = {
     writeOut: options.writeOut ?? defaultWriteOut,
-    writeErr: options.writeErr ?? defaultWriteErr,
+    writeErr: (text: string) => { if (nestedJsonUsage) bufferedErrors.push(text); else (options.writeErr ?? defaultWriteErr)(text); },
   };
   const setExitCode = (code: number) => {
     productExitCode = code;
@@ -126,6 +146,11 @@ export async function runCli(
     return productExitCode;
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (nestedJsonUsage && !SUCCESS_COMMANDER_CODES.has(error.code)) {
+        writers.writeOut(jsonEnvelope(refusalOutcome("beacon", { rule: "invalid-input" })));
+      } else if (nestedJsonUsage) {
+        for (const text of bufferedErrors) (options.writeErr ?? defaultWriteErr)(text);
+      }
       return SUCCESS_COMMANDER_CODES.has(error.code) ? 0 : 2;
     }
     throw error;

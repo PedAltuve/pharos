@@ -29,8 +29,8 @@ function runtime() {
 describe("status command", () => {
   it.each([
     ["no-authority", null, "pharos capture record"],
-    ["open-draft", null, `pharos beacon approve ${beaconId}`],
-    ["active-approved", "ver_018f47de-7a00-7cc0-8000-000000000006", `pharos beacon revoke ${beaconId}`],
+    ["open-draft", null, `pharos beacon prepare approve ${beaconId} --request-id <request-id> --format json`],
+    ["active-approved", "ver_018f47de-7a00-7cc0-8000-000000000006", `pharos beacon prepare revoke ${beaconId} --request-id <request-id> --format json`],
     ["revoked-no-active", null, "pharos capture record"],
   ] as const)("renders %s authority separately from unavailable dimensions", async (authority, activeVersionId, nextCommand) => {
     const env = runtime();

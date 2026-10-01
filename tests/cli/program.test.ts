@@ -95,8 +95,8 @@ describe("runCli --help and no arguments", () => {
       "pharos capture record",
       "pharos capture annotate <capture-id>",
       "pharos beacon inspect <beacon-id>",
-      "pharos beacon approve <beacon-id>",
-      "pharos beacon revoke <beacon-id>",
+      "pharos beacon prepare <approve|revoke> <beacon-id> --request-id <request-id> --format json",
+      "pharos beacon consent-status <request-id> --format json",
       "pharos status <beacon-id>",
     ]) {
       expect(output).toContain(command);
@@ -123,8 +123,10 @@ describe("runCli --help and no arguments", () => {
     expect(output).toContain("pharos capture record");
     expect(output).toContain("pharos capture annotate <capture-id>");
     expect(output).toContain("pharos beacon inspect <beacon-id>");
-    expect(output).toContain("pharos beacon approve <beacon-id>");
-    expect(output).toContain("pharos beacon revoke <beacon-id>");
+    expect(output).not.toContain("pharos beacon approve <beacon-id>");
+    expect(output).toContain("pharos beacon prepare <approve|revoke> <beacon-id> --request-id <request-id> --format json");
+    expect(output).toContain("pharos beacon consent-status <request-id> --format json");
+    expect(output).not.toContain("pharos beacon revoke <beacon-id>");
     expect(output).toContain("pharos status <beacon-id>");
   });
 });
@@ -137,7 +139,7 @@ describe("createProgram command catalogue", () => {
     const capture = program.commands.find((command) => command.name() === "capture");
     const beacon = program.commands.find((command) => command.name() === "beacon");
     expect(capture?.commands.map((command) => command.name())).toEqual(["record", "annotate"]);
-    expect(beacon?.commands.map((command) => command.name())).toEqual(["inspect", "approve", "revoke"]);
+    expect(beacon?.commands.map((command) => command.name())).toEqual(["inspect", "prepare", "consent-status"]);
     expect([...program.commands, ...(capture?.commands ?? []), ...(beacon?.commands ?? [])]
       .flatMap((command) => command.aliases())).toEqual([]);
   });
@@ -157,6 +159,65 @@ describe("program construction", () => {
 });
 
 describe("runCli unknown command handling", () => {
+  it.each(["approve", "revoke"])("refuses retired %s even with JSON intent without dispatching a builder", async (legacy) => {
+    const { outLines, errLines, writeOut, writeErr } = makeWriters();
+    const status = await runCli(["node", "pharos", "beacon", legacy, "bcn_018f47de-7a00-7cc0-8000-000000000004", "--format", "json"],
+      { version: "1.0.0", writeOut, writeErr });
+    expect(status).toBe(2);
+    expect(outLines).toHaveLength(1);
+    expect(JSON.parse(outLines[0]!)).toMatchObject({ command: "beacon", outcome: "refused", errors: [{ rule: "invalid-input" }] });
+    expect(errLines).toEqual([]);
+  });
+
+  it.each([
+    ["--format", "human", "--format", "json"],
+    ["--format=human", "--format=json"],
+    ["--format", "json", "--format", "human"],
+    ["--format=json", "--format=human"],
+  ])("normalizes mixed format intent without exposing unknown option values: %s", async (...formats) => {
+    const secret = "signature-secret-marker";
+    const { outLines, errLines, writeOut, writeErr } = makeWriters();
+    const status = await runCli(["node", "pharos", "beacon", "consent-decline", `--signed-grant=${secret}`, ...formats],
+      { version: "1.0.0", writeOut, writeErr });
+    expect(status).toBe(2);
+    expect(outLines).toHaveLength(1);
+    expect(JSON.parse(outLines[0]!)).toMatchObject({
+      contract: "pharos.cli-envelope/1", command: "beacon", outcome: "refused",
+      errors: [{ rule: "invalid-input" }],
+    });
+    expect(errLines).toEqual([]);
+    expect(outLines.join("") + errLines.join("")).not.toContain(secret);
+  });
+  it.each(["consent-decline", "consent-complete"]) (
+    "rejects model-originated beacon %s as unknown without stdout",
+    async (command) => {
+      const { outLines, errLines, writeOut, writeErr } = makeWriters();
+      const status = await runCli(["node", "pharos", "beacon", command], { version: "1.0.0", writeOut, writeErr });
+      expect(status).toBe(2);
+      expect(outLines).toEqual([]);
+      expect(errLines.join("")).toContain(`unknown command '${command}'`);
+    },
+  );
+
+  it.each(["consent-decline", "consent-complete"]) (
+    "normalizes nested %s parser errors without leaking arguments", async (command) => {
+      const secret = "signature-secret-marker";
+      for (const tail of [[secret], ["--signed-grant", secret]]) {
+        const { outLines, errLines, writeOut, writeErr } = makeWriters();
+        const status = await runCli(["node", "pharos", "beacon", command, ...tail, "--format", "json"],
+          { version: "1.0.0", writeOut, writeErr });
+        expect(status).toBe(2);
+        expect(outLines).toHaveLength(1);
+        expect(JSON.parse(outLines[0]!)).toEqual({
+          contract: "pharos.cli-envelope/1", command: "beacon", outcome: "refused", data: {},
+          errors: [{ rule: "invalid-input", category: "validation", field: "/" }], next_action: null,
+        });
+        expect(errLines).toEqual([]);
+        expect(outLines.join("") + errLines.join("")).not.toContain(secret);
+      }
+    },
+  );
+
   it("rejects an unknown command with exit status 2", async () => {
     const { outLines, errLines, writeOut, writeErr } = makeWriters();
 

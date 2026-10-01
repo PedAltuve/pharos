@@ -93,6 +93,8 @@ Playwright with Chromium is the only browser adapter in v1. Domain contracts MUS
 
 Approval records `operator_confirmed`: an explicit operator interaction occurred. Pharos MUST NOT present this as cryptographic proof of human identity.
 
+**Current implementation boundary (not the entire planned v1 workflow):** Agents can prepare exact approval or reasoned revocation requests through `pharos beacon prepare approve|revoke` and inspect public results through `pharos beacon consent-status`; only a human-invoked interactive Pi `/pharos-consent` can decide. The old direct `pharos beacon approve`/`revoke` commands are not registered in production. Pi displays the canonical request, keeps its private signing key in host process memory, and registers public trust within the resolved project. The signed grant binds the exact request and action; changed state refuses, and durable one-time consumption and persisted results support replay without a second mutation. A human-invoked Pi `/pharos-consent-recover` command can resume a previously verified claim after process restart using its host-private persisted grant, without exposing that grant. Neither agent arguments nor a confirmation boolean decide consent. This protects model-visible host interactions, not malicious same-user shell/process access. `operator_confirmed` does not identify the human. Readiness, handoff, generation, execution, and verification remain future workflow stages.
+
 ## Identity and version lifecycle
 
 ### Stable identity and drafts
