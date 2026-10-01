@@ -8,6 +8,8 @@ export type { ResolvedSecrets, SecretResolutionRefusal, SecretResolver } from ".
 export type { CleanCaptureArtifact, SafeSensitivityFinding, ScanCaptureCommand, SensitivityScanner, SensitivityScanRefusal } from "./sensitivity-scanner.js";
 export type { ContractValidationError, ContractValidator } from "./contract-validator.js";
 export type { JsonValue } from "./json-value.js";
+export { matchConsentGrant, rotateHostTrust } from "./operator-consent.js";
+export type { ConsentBinding, ConsentRequest, ConsentGrant, HostTrust, HostTrustState, RotateHostTrustCommand, GrantVerification, HostConsentVerifier, TrustedHostRegistry, OperatorConsentStore, ConsentStoreRecord, ConsentStoreRefusal } from "./operator-consent.js";
 export type {
   BeaconStore,
   IdempotencyKey,

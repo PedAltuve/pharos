@@ -68,12 +68,58 @@ function safeValue(value: unknown, seen = new WeakSet<object>()): SafeValue | ty
   const safe: Record<string, SafeValue> = {};
   try {
     for (const key of Object.keys(value)) {
-      if (SENSITIVE_KEY.test(key) || safeString(key) === OMIT) continue;
-      const normalized = safeValue((value as Record<string, unknown>)[key], seen);
+      if ((key !== "contract" && SENSITIVE_KEY.test(key)) || safeString(key) === OMIT) continue;
+      const raw = (value as Record<string, unknown>)[key];
+      if (key === "contract" && typeof raw === "string" && /^pharos\.[a-z-]+\/1$/.test(raw)) { safe[key] = raw; continue; }
+      const normalized = safeValue(raw, seen);
       if (normalized !== OMIT) safe[key] = normalized;
     }
   } catch { return OMIT; }
   return safe;
+}
+
+function publicConsentRequest(value: unknown): SafeValue | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const closed = (object: unknown, required: readonly string[], optional: readonly string[] = []): object is Record<string, unknown> =>
+    !!object && typeof object === "object" && !Array.isArray(object) &&
+    required.every((key) => Object.hasOwn(object, key)) &&
+    Reflect.ownKeys(object).every((key) => typeof key === "string" && (required.includes(key) || optional.includes(key)) &&
+      Object.getOwnPropertyDescriptor(object, key)?.enumerable === true && "value" in Object.getOwnPropertyDescriptor(object, key)!);
+  const text = (item: unknown, max = 256): item is string => typeof item === "string" && item.length >= 1 && item.length <= max;
+  if (!closed(value, ["contract", "binding", "challengeId", "expiresAtEpochMs"]) ||
+    (value.contract !== "pharos.operator-consent-request/1" && value.contract !== "pharos.operator-consent-request/2") ||
+    !text(value.challengeId) || !Number.isSafeInteger(value.expiresAtEpochMs) || (value.expiresAtEpochMs as number) < 0) return undefined;
+  const binding = value.binding;
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return undefined;
+  const b = binding as Record<string, unknown>;
+  const base = ["action", "projectId", "beaconId", "requestId"];
+  const v2 = value.contract === "pharos.operator-consent-request/2";
+  const fields = b.action === "approve" ? [...base, "draftId", "expectedRevision", "semanticHash", ...(v2 ? ["staleOriginAcknowledged", "reviewed"] : [])] :
+    b.action === "revoke" && !v2 ? [...base, "expectedActiveVersion", "reason"] : [];
+  if (!fields.length || !closed(binding, fields, b.action === "approve" && !v2 ? ["staleOriginAcknowledged"] : []) ||
+    !text(b.projectId) || !text(b.beaconId) || !text(b.requestId)) return undefined;
+  if (b.action === "approve" ? (!text(b.draftId) || !text(b.semanticHash) || !Number.isSafeInteger(b.expectedRevision) || (b.expectedRevision as number) < 1 ||
+    (Object.hasOwn(b, "staleOriginAcknowledged") && typeof b.staleOriginAcknowledged !== "boolean")) :
+    (!text(b.expectedActiveVersion) || !text(b.reason, 4096) || /^\s/.test(b.reason as string) || !/\S$/.test(b.reason as string) || /[\r\n]/.test(b.reason as string))) return undefined;
+  let reviewed: Record<string, SafeValue> | undefined;
+  if (v2) {
+    const r = b.reviewed;
+    if (b.staleOriginAcknowledged !== true || !closed(r, ["activeVersionId", "activeSemanticHash", "comparisonDigest"]) ||
+      !text(r.comparisonDigest) || !((r.activeVersionId === null && r.activeSemanticHash === null) ||
+        (text(r.activeVersionId) && text(r.activeSemanticHash)))) return undefined;
+    reviewed = { activeVersionId: r.activeVersionId as string | null, activeSemanticHash: r.activeSemanticHash as string | null,
+      comparisonDigest: r.comparisonDigest };
+  }
+  // Construct only the closed public shape; never forward arbitrary object fields or accessors.
+  const publicBinding: Record<string, SafeValue> = { action: b.action as string, projectId: b.projectId, beaconId: b.beaconId, requestId: b.requestId };
+  if (b.action === "revoke") { publicBinding.expectedActiveVersion = b.expectedActiveVersion as string; publicBinding.reason = b.reason as string; }
+  else {
+    publicBinding.draftId = b.draftId as string; publicBinding.expectedRevision = b.expectedRevision as number;
+    publicBinding.semanticHash = b.semanticHash as string;
+    if (Object.hasOwn(b, "staleOriginAcknowledged")) publicBinding.staleOriginAcknowledged = b.staleOriginAcknowledged as boolean;
+    if (reviewed) publicBinding.reviewed = reviewed;
+  }
+  return { contract: value.contract, binding: publicBinding, challengeId: value.challengeId, expiresAtEpochMs: value.expiresAtEpochMs as number };
 }
 
 function safeData(data: Readonly<Record<string, unknown>>): Readonly<Record<string, SafeValue>> {
@@ -125,6 +171,7 @@ function nextActionFor(rule: string): CliNextAction | null {
     return { command: "pharos init", reason: "Initialize or select a project" };
   }
   if (rule === "capture-not-promoted") return { command: "pharos capture record", reason: "Record and promote a capture" };
+  if (rule.includes("stale-origin")) return { command: "host-decision-required", reason: "Ask the trusted interactive host to acknowledge the stale draft before preparing a new request" };
   return null;
 }
 
@@ -175,8 +222,26 @@ export function normalizeOutcome(outcome: CliRenderedOutcome): NormalizedCliOutc
     if (errors.some((error) => error === undefined) || nextAction === undefined) {
       return { value: internalOutcome("pharos"), internal: true };
     }
+    const consent = command === "beacon.prepare" && outcome.outcome === "succeeded" && outcome.data.contract === "pharos.consent-prepare/1";
+    const request = consent ? publicConsentRequest(outcome.data.request) : undefined;
+    if (consent && (!request || outcome.data.status !== "host-decision-required" || safeString(outcome.data.auditId) === OMIT ||
+      !Object.hasOwn(outcome.data, "request") || Reflect.ownKeys(outcome.data).length !== 4)) return { value: internalOutcome("pharos"), internal: true };
+    const statusConsent = command === "beacon.consent-status" && outcome.outcome === "succeeded";
+    const state = outcome.data.status;
+    const pendingStatus = state === "host-decision-required";
+    const statusRequest = statusConsent && pendingStatus ? publicConsentRequest(outcome.data.request) : undefined;
+    if (statusConsent && (outcome.data.contract !== "pharos.consent-status/1" ||
+      !["host-decision-required", "claimed", "declined", "consumed"].includes(state as string) ||
+      safeString(outcome.data.auditId) === OMIT || safeString(outcome.data.requestId) === OMIT ||
+      Reflect.ownKeys(outcome.data).length !== (pendingStatus ? 5 : 4) ||
+      (pendingStatus && (!statusRequest || typeof statusRequest !== "object" || Array.isArray(statusRequest) || statusRequest === null ||
+        !("binding" in statusRequest) || typeof statusRequest.binding !== "object" || statusRequest.binding === null || Array.isArray(statusRequest.binding) ||
+        !("requestId" in statusRequest.binding) || statusRequest.binding.requestId !== outcome.data.requestId)) ||
+      (!pendingStatus && Object.hasOwn(outcome.data, "request")))) return { value: internalOutcome("pharos"), internal: true };
+    const data = consent ? { contract: "pharos.consent-prepare/1", status: "host-decision-required", request: request!, auditId: outcome.data.auditId as string } :
+      statusConsent ? { contract: "pharos.consent-status/1", status: state as string, auditId: outcome.data.auditId as string, requestId: outcome.data.requestId as string, ...(pendingStatus ? { request: statusRequest! } : {}) } : safeData(outcome.data);
     return {
-      value: { command, outcome: outcome.outcome, data: safeData(outcome.data), errors: errors as CliError[], nextAction },
+      value: { command, outcome: outcome.outcome, data, errors: errors as CliError[], nextAction },
       internal: false,
     };
   } catch {

@@ -13,6 +13,7 @@ import type {
 } from "../../domain/beacon/index.js";
 import type {
   BeaconStore,
+  ActiveSemanticSnapshot,
   IdempotencyKey,
   StoreCreateDraftCommand,
 } from "../../domain/ports/beacon-store.js";
@@ -31,7 +32,8 @@ import {
   updateDraft as domainUpdateDraft,
 } from "../../domain/beacon/index.js";
 import type { Hasher } from "../../domain/ports/hasher.js";
-import { project } from "../../domain/semantics/index.js";
+import { project, isCompleteSemanticProjection } from "../../domain/semantics/index.js";
+import { deserializeRecord } from "./serialization.js";
 import { err, ok } from "../../shared/result.js";
 import type { Result } from "../../shared/result.js";
 import type { AtomicWriter } from "./atomic-writer.js";
@@ -58,6 +60,7 @@ import {
   applyRecovery,
   listBeaconIds,
   scanBeacon,
+  scanVersions,
   scanRecovery,
   type RecoverReport,
 } from "./reconcile.js";
@@ -258,6 +261,69 @@ export class FsBeaconStore implements BeaconStore {
     }
     const scan = await scanBeacon(this.projectRoot, beaconId);
     return ok(resolveActiveVersion(scan.beacon));
+  }
+
+  async getActiveSemanticSnapshot(
+    beaconId: string,
+  ): Promise<Result<ActiveSemanticSnapshot | null, BeaconStoreRefusal>> {
+    if (classifyId(beaconId, "existing") !== "valid") return err({ rule: "beacon-not-found", beaconId });
+    const layout = createLayout(this.projectRoot);
+    if (!(await pathExists(layout.beaconRecord(beaconId)))) return err({ rule: "beacon-not-found", beaconId });
+    const scan = await scanVersions(this.projectRoot, beaconId);
+    if (scan.activeVersionId === null) return ok(null);
+    return this.getCommittedSemanticSnapshot(beaconId, scan.activeVersionId, true);
+  }
+
+  /** Read a committed predecessor by immutable version ID, never from a draft. */
+  async getCommittedSemanticSnapshot(beaconId: string, versionId: string, requireActive = false): Promise<Result<ActiveSemanticSnapshot | null, BeaconStoreRefusal>> {
+    if (classifyId(beaconId, "existing") !== "valid") return err({ rule: "beacon-not-found", beaconId });
+    if (classifyId(versionId, "existing") !== "valid") return ok(null);
+    const layout = createLayout(this.projectRoot);
+    if (!(await pathExists(layout.beaconRecord(beaconId)))) return err({ rule: "beacon-not-found", beaconId });
+    const scan = await scanVersions(this.projectRoot, beaconId);
+    const version = getOwn(scan.versions, versionId);
+    if (!version) return ok(null);
+    if (requireActive && (scan.activeVersionId !== versionId || version.status !== "active")) throw new BeaconStoreCorruptionError("Active version is not committed");
+    let bytes: string;
+    try {
+      bytes = await readFile(layout.semantics(beaconId, versionId), "utf8");
+    } catch (error) {
+      if (isMissing(error)) throw new BeaconStoreCorruptionError(`Missing semantics for ${versionId}`);
+      throw error;
+    }
+    let semantics: unknown;
+    try {
+      const raw = parseArtifact(bytes, "semantics");
+      const stamp = recordOf(raw.idempotency, "semantics idempotency");
+      if (stamp.method !== "approveDraft" || typeof stamp.key !== "string"
+        || typeof stamp.key_hash !== "string" || typeof stamp.input_hash !== "string") {
+        throw new Error("Invalid semantics stamp");
+      }
+      semantics = deserializeRecord("semantics", bytes);
+      // The decoder discards unknown fields: compare the raw artifact to a
+      // re-encoded complete projection, accounting only for its approval stamp.
+      if (!isCompleteSemanticProjection(semantics)) throw new Error("Incomplete semantics projection");
+      const payload = { ...raw };
+      delete payload.idempotency;
+      const canonical = parseArtifact(serializeRecord("semantics", semantics), "semantics");
+      if (!isDeepStrictEqual(payload, canonical)) throw new Error("Unknown or malformed semantics fields");
+      if (this.hasher.hash(semantics) !== version.approval.reviewedHash) throw new Error("Semantics hash disagrees with approval");
+    } catch (error) {
+      throw new BeaconStoreCorruptionError(`Corrupt semantics for ${versionId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // An open draft is a legitimate approval replay window; a closed draft
+    // must agree with the immutable manifest's provenance, not supply semantics.
+    const draft = getOwn((await scanBeacon(this.projectRoot, beaconId)).beacon.drafts, version.provenance.approvedDraftId);
+    if (draft?.status === "closed" && (draft.approvedVersionId !== versionId
+      || draft.revision !== version.provenance.approvedRevision
+      || this.hasher.hash(project(draft.content)) !== version.approval.reviewedHash)) {
+      throw new BeaconStoreCorruptionError(`Closed draft provenance conflicts with ${versionId}`);
+    }
+    const after = await scanVersions(this.projectRoot, beaconId);
+    if ((requireActive && after.activeVersionId !== versionId) || !isDeepStrictEqual(getOwn(after.versions, versionId), version)) {
+      throw new BeaconStoreCorruptionError("Active authority changed during semantic read");
+    }
+    return ok({ versionId, semanticHash: version.approval.reviewedHash, semantics });
   }
 
   private async replayOrConflict(
@@ -588,7 +654,13 @@ export class FsBeaconStore implements BeaconStore {
     try {
       await applyPendingProjectDraftReplays(this.projectRoot, this.writer);
       const hash = keyHash(key);
-      const requestedInputHash = inputHash(approveInput(beaconId, cmd), this.hasher);
+      const approvalInput = approveInput(beaconId, cmd);
+      const requestedInputHash = inputHash(cmd.reviewedActiveVersionId === undefined &&
+        cmd.reviewedActiveSemanticHash === undefined && cmd.comparisonDigest === undefined
+        ? approvalInput
+        : { ...(approvalInput as Record<string, string | number | boolean | null>), reviewedActiveVersionId: cmd.reviewedActiveVersionId ?? null,
+          reviewedActiveSemanticHash: cmd.reviewedActiveSemanticHash ?? null,
+          comparisonDigest: cmd.comparisonDigest ?? null }, this.hasher);
       const replayed = await this.replayOrConflict(beaconId, key, hash, requestedInputHash);
       if (replayed !== undefined) return replayed;
       if (classifyId(cmd.versionId, "creation") !== "valid") {
@@ -628,6 +700,25 @@ export class FsBeaconStore implements BeaconStore {
       }
       const mutated = domainApproveDraft(beacon, cmd, this.hasher);
       if (!mutated.ok) return mutated;
+      const hasReview = cmd.reviewedActiveVersionId !== undefined ||
+        cmd.reviewedActiveSemanticHash !== undefined || cmd.comparisonDigest !== undefined;
+      if (hasReview) {
+        const snapshotResult = await this.getActiveSemanticSnapshot(beaconId);
+        if (!snapshotResult.ok) return snapshotResult;
+        const snapshot = snapshotResult.value;
+        const activeId = snapshot?.versionId ?? null;
+        const activeHash = snapshot?.semanticHash ?? null;
+        const currentDraft = getOwn(beacon.drafts, cmd.draftId);
+        if (currentDraft === undefined || currentDraft.status !== "open") {
+          throw new BeaconStoreCorruptionError("Approved draft disappeared during locked approval");
+        }
+        const draftHash = this.hasher.hash(project(currentDraft.content));
+        const digest = this.hasher.hash(["pharos.stale-comparison/2", draftHash, activeId, activeHash]);
+        if (cmd.reviewedActiveVersionId !== activeId ||
+          cmd.reviewedActiveSemanticHash !== activeHash || cmd.comparisonDigest !== digest) {
+          return err({ rule: "reviewed-active-snapshot-mismatch", draftId: cmd.draftId });
+        }
+      }
 
       const draft = getOwn(mutated.value.drafts, cmd.draftId);
       const version = getOwn(mutated.value.versions, cmd.versionId);

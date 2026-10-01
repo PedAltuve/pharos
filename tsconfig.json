@@ -5,6 +5,7 @@
     "types": ["node"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "paths": { "pharos/host-consent": ["./src/host-consent/index.ts"] },
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -16,6 +17,6 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  "include": ["src/**/*.ts", "tests/**/*.ts", "integrations/pi/**/*.ts", "vitest.config.ts"],
   "exclude": ["dist", "node_modules", "tests/fixtures"]
 }

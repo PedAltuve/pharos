@@ -8,6 +8,7 @@ import type { AtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-
 import { FsAtomicWriter } from "../../../src/adapters/fs-beacon-store/atomic-writer.js";
 import { FsBeaconStore } from "../../../src/adapters/fs-beacon-store/fs-beacon-store.js";
 import { JcsSha256Hasher } from "../../../src/adapters/hashing/jcs-sha256-hasher.js";
+import { staleComparisonDigest } from "../../../src/adapters/host-consent-verifier/index.js";
 
 let root: string;
 const origin: DraftOrigin = { branchedFromVersion: null, branchedFromHash: null, forkedFromDraft: null };
@@ -20,15 +21,16 @@ async function seed(store: FsBeaconStore, draftId: string): Promise<void> {
   await expect(store.createDraft("bcn_1", command(draftId), `create-${draftId}`)).resolves.toMatchObject({ ok: true });
 }
 
-function approval(draftId: string, versionId: string, approvedAt: string) {
+async function approval(store: FsBeaconStore, draftId: string, versionId: string, approvedAt: string) {
+  const snapshot = await store.getActiveSemanticSnapshot("bcn_1");
+  if (!snapshot.ok) throw new Error("active snapshot lookup failed");
+  const reviewedHash = new JcsSha256Hasher().hash(project(command(draftId).content));
   return {
-    draftId,
-    expectedRevision: 1,
-    versionId,
-    reviewedHash: new JcsSha256Hasher().hash(project(command(draftId).content)),
-    approvedAt,
-    actor: "operator",
+    draftId, expectedRevision: 1, versionId, reviewedHash, approvedAt, actor: "operator",
     staleOriginAcknowledged: true,
+    reviewedActiveVersionId: snapshot.value?.versionId ?? null,
+    reviewedActiveSemanticHash: snapshot.value?.semanticHash ?? null,
+    comparisonDigest: staleComparisonDigest(reviewedHash, snapshot.value?.versionId ?? null, snapshot.value?.semanticHash ?? null),
   };
 }
 
@@ -101,9 +103,9 @@ describe("FsBeaconStore mutation serialization", () => {
     const writer = new GateWriter((path) => path.endsWith("active.json"));
     const store = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher(), writer });
     await seed(store, "draft_1");
-    const first = store.approveDraft("bcn_1", approval("draft_1", "ver_first", "first"), "approve-key");
+    const first = store.approveDraft("bcn_1", await approval(store, "draft_1", "ver_first", "first"), "approve-key");
     await waitFor(writer, "active.json");
-    const replay = store.approveDraft("bcn_1", approval("draft_1", "ver_retry", "retry"), "approve-key");
+    const replay = store.approveDraft("bcn_1", await approval(store, "draft_1", "ver_retry", "retry"), "approve-key");
     await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
     expect(writer.events.filter((event) => event.includes("active.json"))).toHaveLength(1);
     writer.release();
@@ -115,7 +117,7 @@ describe("FsBeaconStore mutation serialization", () => {
   it("replays the first canonical active revocation for same-key concurrent timestamp regeneration", async () => {
     const setup = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher() });
     await seed(setup, "draft_1");
-    await expect(setup.approveDraft("bcn_1", approval("draft_1", "ver_1", "approval"), "approve")).resolves.toMatchObject({ ok: true });
+    await expect(setup.approveDraft("bcn_1", await approval(setup, "draft_1", "ver_1", "approval"), "approve")).resolves.toMatchObject({ ok: true });
     const writer = new GateWriter((path) => path.endsWith("revocation.json"));
     const store = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher(), writer });
     const first = store.revokeActiveVersion("bcn_1", { expectedActiveVersionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "first" }, "revoke-key");
@@ -130,11 +132,11 @@ describe("FsBeaconStore mutation serialization", () => {
   it("refuses a revoke whose replacement approval commits before it acquires the lock", async () => {
     const setup = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher() });
     await seed(setup, "draft_1");
-    await expect(setup.approveDraft("bcn_1", approval("draft_1", "ver_1", "first"), "approve-1")).resolves.toMatchObject({ ok: true });
+    await expect(setup.approveDraft("bcn_1", await approval(setup, "draft_1", "ver_1", "first"), "approve-1")).resolves.toMatchObject({ ok: true });
     await seed(setup, "draft_2");
     const writer = new GateWriter((path) => path.endsWith("active.json"));
     const store = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher(), writer });
-    const replacement = store.approveDraft("bcn_1", approval("draft_2", "ver_2", "replacement"), "approve-2");
+    const replacement = store.approveDraft("bcn_1", await approval(store, "draft_2", "ver_2", "replacement"), "approve-2");
     await waitFor(writer, "active.json");
     const revoke = store.revokeActiveVersion("bcn_1", { expectedActiveVersionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "revoke" }, "revoke");
     writer.release();
@@ -145,15 +147,15 @@ describe("FsBeaconStore mutation serialization", () => {
   it("permits replacement approval after a revoke commits before it acquires the lock", async () => {
     const setup = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher() });
     await seed(setup, "draft_1");
-    await expect(setup.approveDraft("bcn_1", approval("draft_1", "ver_1", "first"), "approve-1")).resolves.toMatchObject({ ok: true });
+    await expect(setup.approveDraft("bcn_1", await approval(setup, "draft_1", "ver_1", "first"), "approve-1")).resolves.toMatchObject({ ok: true });
     await seed(setup, "draft_2");
     const writer = new GateWriter((path) => path.endsWith("revocation.json"));
     const store = new FsBeaconStore({ projectRoot: root, hasher: new JcsSha256Hasher(), writer });
     const revoke = store.revokeActiveVersion("bcn_1", { expectedActiveVersionId: "ver_1", reason: "withdrawn", actor: "operator", revokedAt: "revoke" }, "revoke");
     await waitFor(writer, "revocation.json");
-    const replacement = store.approveDraft("bcn_1", approval("draft_2", "ver_2", "replacement"), "approve-2");
     writer.release();
     await expect(revoke).resolves.toMatchObject({ ok: true, value: { activeVersionId: null } });
+    const replacement = store.approveDraft("bcn_1", await approval(store, "draft_2", "ver_2", "replacement"), "approve-2");
     await expect(replacement).resolves.toMatchObject({ ok: true, value: { activeVersionId: "ver_2" } });
   });
 });

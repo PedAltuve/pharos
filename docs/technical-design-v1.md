@@ -220,10 +220,11 @@ Every command supports `--format json` emitting one envelope on stdout:
 ```json
 {
   "contract": "pharos.cli-envelope/1",
-  "outcome": "succeeded | refused | failed | inconclusive | interrupted",
+  "command": "beacon.prepare",
+  "outcome": "succeeded",
   "data": {},
-  "refusal": { "rule": "...", "message": "..." },
-  "next_action": "..."
+  "errors": [],
+  "next_action": { "command": "host-decision-required", "reason": "Present the exact request in a trusted interactive host" }
 }
 ```
 
@@ -241,7 +242,11 @@ Human output goes to stderr in JSON mode. Guided flows (`pharos start`) persist 
 | 5 | interrupted |
 | 10 | internal error |
 
-Approval and revocation commands refuse to run without a TTY; the agent task interface never exposes them.
+### Operator consent (implemented HRC slice; not the planned CLI catalog above)
+
+The agent-visible CLI provides `beacon prepare` and `beacon consent-status` for public, project-scoped request preparation and inspection only. It registers no grant, decline, or completion command. The legacy `beacon approve`/`beacon revoke` command routes have been retired from production registration; planned `record|annotate`, task, run, and bundle commands in this section are not claims of current availability.
+
+The runtime-neutral request binds project, Beacon, request ID and expiring challenge to either draft ID/revision/semantic hash (plus required stale-origin acknowledgement) or expected active version and normalized revocation reason. A human invokes the Pi `pharos-consent` command in interactive TUI; it displays the exact public request, offers fixed Approve/Decline choices, keeps an Ed25519 signer in memory, and calls the host-only in-process runtime. Public-key trust is project-bound; private key and signed grant are not returned in agent-visible CLI envelopes. The host runtime is not a model tool and does not itself attest who invoked it. A verified claim durably fixes the action command before the locked Beacon mutation; the separate TUI-only `/pharos-consent-recover` displays the original public request and resumes that claim after process restart while the host runtime loads the persisted signed grant internally. Terminal results and same-input replay require no new approval and cannot authorize another mutation. Unknown contract versions, changed binding/state, expired or declined pending requests refuse without mutation. Assurance remains `operator_confirmed`, not proof of human identity or protection against an arbitrary malicious same-user process.
 
 ---
 

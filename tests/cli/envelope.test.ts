@@ -13,6 +13,41 @@ const envelopeSchema = require("../../src/contracts/schemas/cli-envelope.schema.
 const validateEnvelope = new Ajv2020({ strict: true }).compile(envelopeSchema);
 
 describe("CLI envelopes", () => {
+  it("publishes only the closed v2 stale approval request on prepare and status", () => {
+    const request = { contract: "pharos.operator-consent-request/2", challengeId: "challenge-1", expiresAtEpochMs: 1000,
+      binding: { action: "approve", projectId: "project", beaconId: "beacon", draftId: "draft", expectedRevision: 1,
+        semanticHash: "sha256:draft", requestId: "request", staleOriginAcknowledged: true,
+        reviewed: { activeVersionId: "version", activeSemanticHash: "sha256:active", comparisonDigest: "sha256:comparison" } } };
+    for (const [command, data] of [
+      ["beacon.prepare", { contract: "pharos.consent-prepare/1", status: "host-decision-required", auditId: "audit-1", request }],
+      ["beacon.consent-status", { contract: "pharos.consent-status/1", status: "host-decision-required", auditId: "audit-1", requestId: "request", request }],
+    ] as const) {
+      const render = (candidate: unknown) => JSON.parse(jsonEnvelope({ command, outcome: "succeeded", errors: [], nextAction: null,
+        data: { ...data, request: candidate } }));
+      expect(render(request).data.request).toEqual(request);
+      for (const candidate of [
+        { ...request, grant: "canary" },
+        { ...request, binding: { ...request.binding, privateKey: "canary" } },
+        { ...request, binding: { ...request.binding, reviewed: { ...request.binding.reviewed, semanticProjection: "canary" } } },
+        { ...request, binding: { ...request.binding, reviewed: { ...request.binding.reviewed, activeSemanticHash: null } } },
+        { ...request, binding: { ...request.binding, staleOriginAcknowledged: false } },
+      ]) {
+        const output = render(candidate);
+        expect(output).toMatchObject({ outcome: "failed", data: {}, errors: [{ rule: "internal-error" }] });
+        expect(JSON.stringify(output)).not.toContain("canary");
+      }
+    }
+  });
+  it("fails closed on undeclared public consent request fields instead of emitting a changed binding", () => {
+    const output = JSON.parse(jsonEnvelope({
+      command: "beacon.prepare", outcome: "succeeded", errors: [], nextAction: null,
+      data: { contract: "pharos.consent-prepare/1", status: "host-decision-required", auditId: "audit-1",
+        request: { contract: "pharos.operator-consent-request/1", challengeId: "challenge-1", expiresAtEpochMs: 1000,
+          binding: { action: "revoke", projectId: "project", beaconId: "beacon", requestId: "request", expectedActiveVersion: "version", reason: "valid", privateKey: "canary" } } },
+    }));
+    expect(output).toMatchObject({ outcome: "failed", data: {}, errors: [{ rule: "internal-error" }] });
+    expect(JSON.stringify(output)).not.toContain("canary");
+  });
   it("writes exactly one safe v1 JSON object for a successful command", () => {
     const envelope = jsonEnvelope({
       command: "capture.annotate",

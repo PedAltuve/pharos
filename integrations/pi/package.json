@@ -1,0 +1,10 @@
+{
+  "name": "@pharos/pi-consent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./extension.ts"] },
+  "dependencies": { "pharos": "0.0.0" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "scripts": { "test": "npm --prefix ../.. test -- tests/integrations/pi", "typecheck": "tsc --noEmit -p ../../tsconfig.json" }
+}

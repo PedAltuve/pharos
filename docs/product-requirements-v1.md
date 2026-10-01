@@ -111,13 +111,9 @@ Advanced annotations may remain optional in v1.
 
 The guided workflow validates the semantic core, computes the semantic hash, saves a draft, and stops at the approval boundary.
 
-Approval requires a separate interactive operator command:
+**Current implementation (host-relayed consent slice):** The agent may prepare approval with `pharos beacon prepare approve <beacon-id> --request-id <req_id> --format json` and inspect its public outcome with `pharos beacon consent-status <req_id> --format json`. Only a human-invoked `/pharos-consent <req_id>` in an interactive Pi TUI can choose Approve or Decline; the agent cannot decide, submit a grant, or complete the action through the public CLI. Revocation uses `pharos beacon prepare revoke <beacon-id> --request-id <req_id> --reason "Reason" --format json` and the same Pi decision and status flow. Historical `pharos beacon approve` and `pharos beacon revoke` are not registered production commands. The full guided v1 journey below remains a product goal, not a claim that handoff or verification is available.
 
-```bash
-pharos beacon approve <beacon-id>
-```
-
-Approval binds the semantic bundle and records `operator_confirmed` assurance. It does not claim cryptographic proof that a human controlled the terminal.
+The Pi host uses project-bound public trust and keeps its private signing key in host process memory, not repository configuration or model-visible output. Its short-lived signed grant binds the exact pending approval or reasoned revocation request; changed state refuses and a consumed grant cannot authorize another mutation. After a verified claim, the human-invoked Pi `/pharos-consent-recover <req_id>` displays the original public request and resumes the persisted exact action through the host runtime without returning the stored grant or granting fresh authority. Pending or declined requests cannot use this recovery route. This boundary excludes malicious same-user shell/process access. Approval records `operator_confirmed`, not proof of a human's identity.
 
 Approved versions are immutable. Approving a new version atomically supersedes the previous active approved version. A Beacon ID has at most one active approved version.
 
@@ -184,7 +180,7 @@ Pharos reports:
 
 Pharos must provide a guided, resumable `pharos start` command backed by independently callable operations.
 
-The planned v1 command surface is:
+The planned v1 command surface below is historical product planning, **not** the current production CLI. For today's approval/revocation commands and human Pi boundary, see the current-implementation note in step 5:
 
 ```text
 pharos start [beacon-id]

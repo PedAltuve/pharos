@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FsBeaconStore } from "../../src/adapters/fs-beacon-store/index.js";
 import { FsCaptureStore } from "../../src/adapters/fs-capture-store/index.js";
+import { FsConsentStore } from "../../src/adapters/fs-consent-store/index.js";
 import { FsProjectContextStore } from "../../src/adapters/fs-project-context-store/index.js";
 import { JcsSha256Hasher } from "../../src/adapters/hashing/index.js";
 import { AjvContractValidator } from "../../src/adapters/validation/ajv-contract-validator.js";
@@ -20,6 +21,8 @@ import {
 import { mapAnnotation } from "../../src/application/annotation/index.js";
 import { createComposition, createUnregisteredCommandSet } from "../../src/cli/composition.js";
 import { createProgram } from "../../src/cli/program.js";
+import { createHostConsentRuntime } from "../../src/host-consent/index.js";
+import piConsent from "../../integrations/pi/extension.js";
 import type { BeaconLifecyclePrompt } from "../../src/cli/prompts/input.js";
 import type { Recorder, SensitivityScanner } from "../../src/domain/ports/index.js";
 import { ok } from "../../src/shared/result.js";
@@ -93,6 +96,8 @@ function compositionFactory(target: string) {
       const projectRoot = join(home, "store", ids.project);
       const captures = new FsCaptureStore({ projectRoot });
       const beacons = new FsBeaconStore({ projectRoot, hasher });
+      const consentStore = new FsConsentStore({ projectRoot });
+      const issueChallenge = () => ({ challengeId: randomUUID(), expiresAtEpochMs: Date.now() + 300_000 });
       const generatedIds = {
         next(kind: "project" | "capture" | "beacon" | "draft" | "version" | "request") {
           return kind === "request" ? ids.annotateRequest : ids[kind];
@@ -111,7 +116,7 @@ function compositionFactory(target: string) {
             ? projects.resolveByPath(target)
             : projects.resolveById(projectId, target);
         },
-        forProject() {
+        forProject(project) {
           return {
             record: new RecordCapture({
               clock: { now: () => new Date(timestamp) }, ids: generatedIds, hasher,
@@ -123,12 +128,14 @@ function compositionFactory(target: string) {
             }),
             inspect: new InspectBeaconDraft({ captureStore: captures, beaconStore: beacons, hasher }),
             approve: new ApproveBeaconDraft({
-              clock: { now: () => new Date(timestamp) }, ids: generatedIds, hasher,
-              captureStore: captures, beaconStore: beacons,
+              clock: { now: () => new Date() }, ids: generatedIds, hasher,
+              captureStore: captures, beaconStore: beacons, consentStore, issueChallenge,
             }),
             status: new BeaconStatus({ beaconStore: beacons }),
+            consentStore,
             revoke: new RevokeActiveBeacon({
-              clock: { now: () => new Date(timestamp) }, beaconStore: beacons,
+              clock: { now: () => new Date() }, beaconStore: beacons,
+              canonicalProjectId: project.projectId, consentStore, issueChallenge,
             }),
           };
         },
@@ -157,6 +164,34 @@ async function invoke(args: readonly string[], target: string, lifecyclePrompt: 
   const program = createProgram(commands, { version: "0.0.0", ...writers, setExitCode });
   await program.parseAsync(["node", "pharos", ...args]);
   return { exitCode, envelope: JSON.parse(stdout.join("")) as Record<string, unknown> };
+}
+
+async function decideInPi(requestId: string, target: string, home: string) {
+  let handler: ((args: string, context: unknown) => Promise<void>) | undefined;
+  const notifications: string[] = [];
+  const reviewPages: string[] = [];
+  piConsent({ registerCommand(_name, command) { handler = command.handler as (args: string, context: unknown) => Promise<void>; } }, {
+    broker: () => createHostConsentRuntime({ home, cwd: target }),
+    width: () => 80,
+    height: () => 24,
+  });
+  if (!handler) throw new Error("Pi consent command was not registered");
+  await handler(requestId, { mode: "tui", ui: {
+    select: async (title: string, choices: string[]) => {
+      if (choices[0] === "Continue") {
+        expect(choices).toEqual(["Continue", "Cancel"]);
+        reviewPages.push(title);
+        return "Continue";
+      }
+      expect(reviewPages.length).toBeGreaterThan(0);
+      expect(reviewPages.join("\n")).toContain("requestId");
+      expect(choices).toEqual(["Approve", "Decline"]);
+      return "Approve";
+    },
+    notify: (message: string) => { notifications.push(message); },
+  } });
+  expect(reviewPages.length).toBeGreaterThan(0);
+  expect(notifications).toContain("Pharos consent completed; inspect status for the public result");
 }
 
 function recordingLifecyclePrompt() {
@@ -212,51 +247,50 @@ describe("guided Beacon lifecycle program", () => {
       exitCode: 0, envelope: { outcome: "succeeded", data: { beacon_id: ids.beacon, draft_id: ids.draft, status: "open" } },
     });
 
-    const approved = await invoke(["beacon", "approve", ids.beacon, "--format", "json", "--request-id", ids.approveRequest], target, lifecycle.prompt);
-    expect(approved).toMatchObject({
-      exitCode: 0,
-      envelope: { outcome: "succeeded", data: { beacon_id: ids.beacon, version_id: ids.version, status: "active", assurance: "operator_confirmed", semantic_hash: expectedSemanticHash } },
+    const home = join(root, "pharos-home");
+    const projectRoot = join(home, "store", ids.project);
+    await expect(invoke(["beacon", "prepare", "approve", ids.beacon, "--request-id", ids.approveRequest, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "host-decision-required", request: { binding: { action: "approve", semanticHash: expectedSemanticHash } } } },
     });
-    expect(lifecycle.approvals).toEqual([{
-      beaconId: ids.beacon, draftId: ids.draft, captureId: ids.capture, semanticHash: expectedSemanticHash,
-    }]);
-
-    const projectRoot = join(root, "pharos-home", "store", ids.project);
+    await decideInPi(ids.approveRequest, target, home);
+    await expect(invoke(["beacon", "consent-status", ids.approveRequest, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "consumed" } },
+    });
     const persistedApproval = await new FsBeaconStore({ projectRoot, hasher: new JcsSha256Hasher() }).getBeacon(ids.beacon);
     expect(persistedApproval).toMatchObject({
       ok: true,
-      value: {
-        activeVersionId: ids.version,
-        drafts: { [ids.draft]: { status: "closed", approvedVersionId: ids.version } },
-        versions: { [ids.version]: { status: "active", approval: { reviewedHash: expectedSemanticHash, assurance: "operator_confirmed" } } },
-      },
+      value: { drafts: { [ids.draft]: { status: "closed" } } },
     });
+    if (!persistedApproval.ok || !persistedApproval.value.activeVersionId) throw new Error("approval did not activate a version");
+    const versionId = persistedApproval.value.activeVersionId;
+    expect(persistedApproval.value.versions[versionId]).toMatchObject({ status: "active", approval: { reviewedHash: expectedSemanticHash, assurance: "operator_confirmed" } });
+    expect(lifecycle.approvals).toEqual([]);
 
     const beforeActiveStatus = await snapshotFiles(projectRoot);
     const activeStatus = await invoke(["status", ids.beacon, "--format", "json"], target, lifecycle.prompt);
     const repeatedActiveStatus = await invoke(["status", ids.beacon, "--format", "json"], target, lifecycle.prompt);
     expect(activeStatus).toMatchObject({
       exitCode: 0,
-      envelope: { outcome: "succeeded", data: { authority: "active-approved", active_version_id: ids.version, readiness: "unavailable", staleness: "unavailable", verification: "unavailable" } },
+      envelope: { outcome: "succeeded", data: { authority: "active-approved", active_version_id: versionId, readiness: "unavailable", staleness: "unavailable", verification: "unavailable" } },
     });
     expect(repeatedActiveStatus).toEqual(activeStatus);
     await expect(snapshotFiles(projectRoot)).resolves.toEqual(beforeActiveStatus);
 
-    const revoked = await invoke(["beacon", "revoke", ids.beacon, "--format", "json", "--request-id", ids.revokeRequest], target, lifecycle.prompt);
-    expect(revoked).toMatchObject({
-      exitCode: 0,
-      envelope: { outcome: "succeeded", data: { beacon_id: ids.beacon, version_id: ids.version, status: "revoked" } },
+    await expect(invoke(["beacon", "prepare", "revoke", ids.beacon, "--request-id", ids.revokeRequest, "--reason", "No longer needed", "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "host-decision-required", request: { binding: { action: "revoke", expectedActiveVersion: versionId, reason: "No longer needed" } } } },
     });
-    expect(lifecycle.revocations).toEqual([{
-      beaconId: ids.beacon, expectedActiveVersionId: ids.version, reason: "No longer needed",
-    }]);
+    await decideInPi(ids.revokeRequest, target, home);
+    await expect(invoke(["beacon", "consent-status", ids.revokeRequest, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "consumed" } },
+    });
+    expect(lifecycle.revocations).toEqual([]);
 
     const persistedRevocation = await new FsBeaconStore({ projectRoot, hasher: new JcsSha256Hasher() }).getBeacon(ids.beacon);
     expect(persistedRevocation).toMatchObject({
       ok: true,
       value: {
         activeVersionId: null,
-        versions: { [ids.version]: { status: "revoked", approval: { reviewedHash: expectedSemanticHash }, revocation: { reason: "No longer needed" } } },
+        versions: { [versionId]: { status: "revoked", approval: { reviewedHash: expectedSemanticHash }, revocation: { reason: "No longer needed" } } },
       },
     });
 
@@ -339,23 +373,24 @@ describe("guided Beacon lifecycle program", () => {
       committedAt: timestamp,
     })).resolves.toMatchObject({ ok: true });
 
-    const approved = await invoke(["beacon", "approve", ids.beacon, "--format", "json", "--request-id", ids.approveRequest], target, lifecycle.prompt);
-    expect(approved).toMatchObject({
-      exitCode: 0,
-      envelope: { outcome: "succeeded", data: { beacon_id: ids.beacon, version_id: ids.version, status: "active", semantic_hash: expectedSemanticHash } },
+    const home = join(root, "pharos-home");
+    await expect(invoke(["beacon", "prepare", "approve", ids.beacon, "--request-id", ids.approveRequest, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "host-decision-required", request: { binding: { action: "approve", semanticHash: expectedSemanticHash } } } },
     });
-    expect(lifecycle.approvals).toEqual([{
-      beaconId: ids.beacon, draftId: ids.draft, captureId: ids.capture, semanticHash: expectedSemanticHash,
-    }]);
+    await decideInPi(ids.approveRequest, target, home);
+    const activated = await beacons.getActiveVersion(ids.beacon);
+    if (!activated.ok || !activated.value) throw new Error("replacement did not activate");
+    const versionId = activated.value.versionId;
+    expect(lifecycle.approvals).toEqual([]);
 
     await expect(invoke(["status", ids.beacon, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
       exitCode: 0,
-      envelope: { outcome: "succeeded", data: { authority: "active-approved", active_version_id: ids.version } },
+      envelope: { outcome: "succeeded", data: { authority: "active-approved", active_version_id: versionId } },
     });
-    await expect(invoke(["beacon", "revoke", ids.beacon, "--format", "json", "--request-id", ids.revokeRequest], target, lifecycle.prompt)).resolves.toMatchObject({
-      exitCode: 0,
-      envelope: { outcome: "succeeded", data: { beacon_id: ids.beacon, version_id: ids.version, status: "revoked" } },
+    await expect(invoke(["beacon", "prepare", "revoke", ids.beacon, "--request-id", ids.revokeRequest, "--reason", "No longer needed", "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
+      exitCode: 0, envelope: { outcome: "succeeded", data: { status: "host-decision-required", request: { binding: { action: "revoke", expectedActiveVersion: versionId } } } },
     });
+    await decideInPi(ids.revokeRequest, target, home);
     await expect(invoke(["status", ids.beacon, "--format", "json"], target, lifecycle.prompt)).resolves.toMatchObject({
       exitCode: 0,
       envelope: { outcome: "succeeded", data: { authority: "revoked-no-active", active_version_id: null } },
@@ -368,11 +403,11 @@ describe("guided Beacon lifecycle program", () => {
         activeVersionId: null,
         drafts: {
           [ids.olderDraft]: { status: "closed", approvedVersionId: ids.olderVersion },
-          [ids.draft]: { status: "closed", approvedVersionId: ids.version },
+          [ids.draft]: { status: "closed", approvedVersionId: versionId },
         },
         versions: {
-          [ids.olderVersion]: { status: "superseded", supersededBy: ids.version },
-          [ids.version]: { status: "revoked", previousStatus: "active", approval: { reviewedHash: expectedSemanticHash }, revocation: { reason: "No longer needed" } },
+          [ids.olderVersion]: { status: "superseded", supersededBy: versionId },
+          [versionId]: { status: "revoked", previousStatus: "active", approval: { reviewedHash: expectedSemanticHash }, revocation: { reason: "No longer needed" } },
         },
       },
     });

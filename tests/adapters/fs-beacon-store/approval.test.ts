@@ -51,6 +51,9 @@ function approveCmd(overrides: Partial<{
   approvedAt: string;
   actor: string | null;
   staleOriginAcknowledged: boolean;
+  reviewedActiveVersionId: string | null;
+  reviewedActiveSemanticHash: string | null;
+  comparisonDigest: string;
 }> = {}) {
   return {
     draftId: "draft_1",
@@ -138,6 +141,96 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(projectDir, { recursive: true, force: true });
+});
+
+describe("FsBeaconStore.approveDraft — locked reviewed snapshot", () => {
+  async function preparedAgainstActive(store: FsBeaconStore, activeVersionId: string) {
+    const snapshot = await store.getActiveSemanticSnapshot("bcn_1");
+    expect(snapshot).toMatchObject({ ok: true, value: { versionId: activeVersionId } });
+    if (!snapshot.ok || !snapshot.value) throw new Error("missing active snapshot");
+    return approveCmd({ draftId: "draft_2", versionId: "ver_2", staleOriginAcknowledged: true,
+      reviewedActiveVersionId: snapshot.value.versionId,
+      reviewedActiveSemanticHash: snapshot.value.semanticHash,
+      comparisonDigest: hasher.hash(["pharos.stale-comparison/2", hasher.hash(project(content("reviewed"))), snapshot.value.versionId, snapshot.value.semanticHash]),
+    });
+  }
+
+  it("rejects a different active version even when semantic hashes match", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    await store.approveDraft("bcn_1", approveCmd(), "first");
+    await seedOpenDraft(store, "draft_3");
+    const snapshot = await store.getActiveSemanticSnapshot("bcn_1");
+    if (!snapshot.ok || !snapshot.value) throw new Error("missing active snapshot");
+    const third = approveCmd({ draftId: "draft_3", versionId: "ver_3", staleOriginAcknowledged: true,
+      reviewedActiveVersionId: snapshot.value.versionId,
+      reviewedActiveSemanticHash: snapshot.value.semanticHash,
+      comparisonDigest: hasher.hash(["pharos.stale-comparison/2", hasher.hash(project(content("reviewed"))), snapshot.value.versionId, snapshot.value.semanticHash]) });
+    expect(await store.approveDraft("bcn_1", third, "third")).toMatchObject({ ok: true, value: { activeVersionId: "ver_3" } });
+    await seedOpenDraft(store, "draft_2");
+    const prepared = approveCmd({ draftId: "draft_2", versionId: "ver_2", staleOriginAcknowledged: true,
+      reviewedActiveVersionId: snapshot.value.versionId, reviewedActiveSemanticHash: snapshot.value.semanticHash,
+      comparisonDigest: hasher.hash(["pharos.stale-comparison/2", hasher.hash(project(content("reviewed"))), snapshot.value.versionId, snapshot.value.semanticHash]) });
+    const result = await store.approveDraft("bcn_1", prepared, "stale-id");
+    expect(result).toMatchObject({ ok: false, error: { rule: "reviewed-active-snapshot-mismatch" } });
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "versions", "ver_2", "manifest.json"))).toBe(false);
+    expect((await scanBeacon(projectDir, "bcn_1")).beacon.activeVersionId).toBe("ver_3");
+  });
+
+  it("fails closed when active semantics change after review", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    await store.approveDraft("bcn_1", approveCmd(), "first");
+    await seedOpenDraft(store, "draft_2");
+    const prepared = await preparedAgainstActive(store, "ver_1");
+    const path = join(projectDir, "beacons", "bcn_1", "versions", "ver_1", "semantics.json");
+    const artifact = JSON.parse(await readFile(path, "utf8"));
+    artifact.purpose = "corrupt";
+    await writeFile(path, JSON.stringify(artifact));
+    await expect(store.approveDraft("bcn_1", prepared, "corrupt-active")).rejects.toThrow(BeaconStoreCorruptionError);
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "versions", "ver_2", "manifest.json"))).toBe(false);
+    expect((await scanBeacon(projectDir, "bcn_1")).beacon.activeVersionId).toBe("ver_1");
+  });
+
+  it("refuses a mismatched digest before writing a version", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    const result = await store.approveDraft("bcn_1", approveCmd({
+      reviewedActiveVersionId: null, reviewedActiveSemanticHash: null,
+      comparisonDigest: "sha256:wrong",
+    }), "bad-digest");
+    expect(result).toMatchObject({ ok: false, error: { rule: "reviewed-active-snapshot-mismatch" } });
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "versions", "ver_1", "manifest.json"))).toBe(false);
+    expect((await scanBeacon(projectDir, "bcn_1")).beacon.activeVersionId).toBeNull();
+  });
+
+  it("refuses a reviewed null snapshot when an active version appears", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    const reviewedHash = hasher.hash(project(content("reviewed")));
+    const prepared = approveCmd({ draftId: "draft_2", versionId: "ver_2",
+      staleOriginAcknowledged: true, reviewedActiveVersionId: null,
+      reviewedActiveSemanticHash: null,
+      comparisonDigest: hasher.hash(["pharos.stale-comparison/2", reviewedHash, null, null]) });
+    await store.approveDraft("bcn_1", approveCmd(), "first");
+    await seedOpenDraft(store, "draft_2");
+    const result = await store.approveDraft("bcn_1", prepared, "prepared-null");
+    expect(result).toMatchObject({ ok: false, error: { rule: "reviewed-active-snapshot-mismatch" } });
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "versions", "ver_2", "manifest.json"))).toBe(false);
+    expect((await scanBeacon(projectDir, "bcn_1")).beacon.activeVersionId).toBe("ver_1");
+  });
+
+  it("refuses acknowledged stale approval without reviewed fields", async () => {
+    const store = new FsBeaconStore({ projectRoot: projectDir, hasher });
+    await seedOpenDraft(store);
+    await store.approveDraft("bcn_1", approveCmd(), "first");
+    await seedOpenDraft(store, "draft_2");
+    const result = await store.approveDraft("bcn_1", approveCmd({
+      draftId: "draft_2", versionId: "ver_2", staleOriginAcknowledged: true,
+    }), "no-review");
+    expect(result).toMatchObject({ ok: false, error: { rule: "stale-origin-review-required" } });
+    expect(await exists(join(projectDir, "beacons", "bcn_1", "versions", "ver_2", "manifest.json"))).toBe(false);
+  });
 });
 
 describe("FsBeaconStore.approveDraft — hash re-verification (fs-beacon-store R5 S1)", () => {
@@ -369,8 +462,16 @@ describe("FsBeaconStore.approveDraft — D6b adoption probe", () => {
         error: { rule: "stale-attempt-artifact", artifact: "manifest", ownerId: "ver_1" },
       });
     await seedOpenDraft(store, "draft_3");
+    const snapshot = await store.getActiveSemanticSnapshot("bcn_1");
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok || !snapshot.value) return;
+    const reviewedHash = hasher.hash(project(content("reviewed")));
     await expect(store.approveDraft("bcn_1", approveCmd({
       draftId: "draft_3", versionId: "ver_3", staleOriginAcknowledged: true,
+      reviewedActiveVersionId: snapshot.value.versionId,
+      reviewedActiveSemanticHash: snapshot.value.semanticHash,
+      comparisonDigest: hasher.hash(["pharos.stale-comparison/2", reviewedHash,
+        snapshot.value.versionId, snapshot.value.semanticHash]),
     }), "fresh-key"))
       .resolves.toMatchObject({ ok: true, value: { activeVersionId: "ver_3" } });
   });
