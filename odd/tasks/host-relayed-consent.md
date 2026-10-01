@@ -29,12 +29,12 @@ Issue #77 delivered immutable approval, truthful status, and reasoned revocation
 - Contracts HRC-1: `e38112a` (559 review lines; indivisible schemas/contract/tests exception).
 - Host trust and verifier: `2c3c53e` (397 lines).
 - Durable consent HRC-2: `9c56e9b` (1,298 lines; indivisible store/recovery/tests exception).
-- Approval HRC-3: `c7f7f4a` (1,016 lines; locked semantic snapshot/application/tests exception).
-- Revocation HRC-4: `e6aeb14` (366 lines).
-- Private host runtime: `f203e24` (523 lines; runtime/recovery/tests exception).
-- Final integrated host-delivery PR contains CLI HRC-5 `ec9ced9` (447 lines), Pi HRC-6 `de4ad72` (853 lines), and journey/spec/docs HRC-7 `fadfeee` (307 lines). These subcommits are reviewed together against private runtime because the old guided test still invokes removed production CLI routes until the Pi journey migration. The earlier local `8ca902e` intermediate failed standalone typecheck (premature Pi import) and was not published. Final integrated PR is 1,607 review lines plus tracker updates: unavoidable `size:exception` after the one honest slicing pass; no code, tests, or docs removed. Keep tracker draft/no-merge until integration.
+- Approval HRC-3: `4149f1f` (1,025 lines; locked semantic snapshot/application and affected revocation tests exception).
+- Revocation HRC-4: `3d9077b` (357 lines).
+- Private host runtime: `1ffb209` (523 lines; runtime/recovery/tests exception).
+- Integrated CLI/Pi/journey/docs HRC-5–7: `8df5009` (1,607 lines before tracker evidence updates). The legacy guided test still invokes removed production CLI routes until the Pi journey migration, so these changes cannot be independent green PRs. This is an unavoidable `size:exception` after the one honest slicing pass; no code, tests, or docs were removed. Earlier unpushed intermediate branches that failed isolated verification are not delivery branches. Keep tracker draft/no-merge until integration.
 
-Each slice is independently checked against its immediate parent. Over-budget cohesive slices are labeled `size:exception`; no tests or docs are removed to meet the heuristic. Immutable commit-snapshot focused tests, typecheck, and whitespace checks passed through the durable-store and lifecycle slices. The earlier final commit `f97e784` passed 76 files/876 tests, Pi 46 tests, both typechecks, build, lint, and whitespace check; after reallocating the protocol test to the Pi subcommit, recheck the new final head before publishing. Child PRs stay draft/no-merge pending chain integration and any CI failures.
+Each PR is checked against its immediate parent. Over-budget cohesive slices receive `size:exception`; no tests or docs are removed to meet the heuristic. Immutable commit-snapshot focused tests, typecheck, and whitespace checks passed for earlier slices. The reconstructed integrated head has the same source tree as the fully verified candidate (76 files/876 tests, Pi 46 tests, both typechecks, build, lint, whitespace check); recheck final evidence updates and repaired approval slice before publishing. Child PRs stay draft/no-merge pending chain integration and any CI failures.
 
 ## Product decisions
 
