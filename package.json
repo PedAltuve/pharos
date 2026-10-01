@@ -6,6 +6,12 @@
   "engines": {
     "node": ">=20"
   },
+  "exports": {
+    "./host-consent": {
+      "types": "./dist/host-consent/index.d.ts",
+      "default": "./dist/host-consent/index.js"
+    }
+  },
   "bin": {
     "pharos": "dist/cli/index.js"
   },
